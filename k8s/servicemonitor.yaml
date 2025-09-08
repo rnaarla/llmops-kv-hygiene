@@ -1,0 +1,17 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: tracer-metrics
+  labels:
+    release: prometheus-operator
+spec:
+  selector:
+    matchLabels:
+      app: model-server
+      component: tracer
+  endpoints:
+    - port: http-metrics
+      path: /metrics
+      interval: 30s
+  namespaceSelector:
+    any: true

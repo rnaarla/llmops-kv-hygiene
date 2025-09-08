@@ -1,0 +1,32 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kv-hygiene-eviction-checker
+spec:
+  schedule: "@daily"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: eviction-checker
+              image: llmops-kv-hygiene:cpu
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: FORENSIC_HMAC_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: forensic-hmac-secret
+                      key: FORENSIC_HMAC_SECRET
+              volumeMounts:
+                - name: forensics
+                  mountPath: /app/forensics
+              command: [
+                "bash", "-lc",
+                "python - << 'PY'\nfrom tools.cache_tracer import ForensicLogger\nprint(ForensicLogger.verify_chain('forensics/kv_cache.log'))\nPY\n && python tools/eviction_checker.py forensics/coverage.json --out forensics/verdict.json"
+              ]
+          volumes:
+            - name: forensics
+              persistentVolumeClaim:
+                claimName: forensics-pvc

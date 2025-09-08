@@ -1,0 +1,27 @@
+flowchart LR
+    %% CI/CD gates enforcing KV hygiene
+
+    subgraph Developer
+        A[Commit / PR]
+    end
+
+    subgraph CI
+        B[Install deps\n(python, pytest, torch)]
+        C[Run unit tests\npytest -q]
+        D[Run fuzzing harness]
+        E[Coverage report\n>=95%]
+        F[Hygiene checks\neviction_checker\ncoverage >= 99.9%]
+        G[Forensic integrity\nhash chain verify]
+        H{All thresholds met?}
+    end
+
+    subgraph CD
+        I[Artifact build]
+        J[Compliance evidence bundle\ncoverage.json, hash_chain.json, test report]
+        K[Manual approval\n(as needed)]
+        L[Deploy]
+    end
+
+    A --> B --> C --> D --> E --> F --> G --> H
+    H -- Yes --> I --> J --> K --> L
+    H -- No --> X[Block Merge/Deploy\nwith diagnostics]

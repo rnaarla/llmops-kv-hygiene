@@ -1,0 +1,43 @@
+# CUDA-enabled image for llmops-kv-hygiene
+# Requires NVIDIA Container Toolkit on the host
+FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG PYTHON_VERSION=3.10
+# Default to CUDA 12.1 PyTorch wheels
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121
+# Optionally pin torch (e.g. 2.4.0). Leave empty for latest compatible
+ARG TORCH_VERSION=
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PATH=/usr/local/bin:$PATH
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-pip python3-venv python3-dev \
+    build-essential curl ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install dependencies first (leveraging Docker layer cache)
+COPY requirements.txt /app/requirements.txt
+RUN python3 -m pip install --upgrade pip \
+    && if [ -n "$TORCH_VERSION" ]; then \
+         python3 -m pip install --index-url ${TORCH_INDEX_URL} torch==${TORCH_VERSION}; \
+       else \
+         python3 -m pip install --index-url ${TORCH_INDEX_URL} torch; \
+       fi \
+    && python3 -m pip install -r /app/requirements.txt
+
+# Copy source
+COPY . /app
+ENV PYTHONPATH=/app
+
+# Create non-root user
+RUN useradd -m appuser && chown -R appuser:appuser /app
+USER appuser
+
+# Default command is a shell; override in compose/k8s
+CMD ["bash"]

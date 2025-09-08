@@ -1,0 +1,224 @@
+name: kv-hygiene-ci
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 6 * * *'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+
+jobs:
+  lint:
+    name: Lint (ruff/black/mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+      - name: Install linters
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff black mypy
+      - name: Ruff
+        run: ruff check .
+      - name: Black check
+        run: black --check .
+      - name: Mypy
+  run: mypy --config-file mypy.ini
+
+  test:
+    name: Unit tests and hygiene gates
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ['3.11']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests with coverage (XML + JUnit)
+        run: |
+          mkdir -p reports
+          pytest --maxfail=1 --disable-warnings -q \
+            --cov=tools --cov-report=term-missing \
+            --cov-report=xml:reports/coverage.xml \
+            --junitxml=reports/junit.xml \
+            --cov-fail-under=95
+
+      - name: Generate metrics JSON and verify HMAC chain
+        env:
+          FORENSIC_HMAC_SECRET: ci-secret
+        run: |
+          python - <<'PY'
+          import json
+          from tools.cache_tracer import CacheTracer, ForensicLogger
+          t = CacheTracer()
+          h = t.allocate(tenant_id="ci", request_id="ci-1", model_id="m", shape=(128,), dtype="float32", device="cpu", framework="numpy")
+          t.mark_in_use(h)
+          cov = t.sanitize(h, async_=False, verify=True)
+          try:
+              t.free(h)
+          except Exception:
+              pass
+          t.export_metrics("forensics/coverage.json")
+          res = ForensicLogger.verify_chain("forensics/kv_cache.log")
+          print("Coverage:", cov)
+          print("Metrics:", open("forensics/coverage.json").read())
+          print("Forensic chain:", json.dumps(res))
+          PY
+
+      - name: Verify rotated forensic chain (all files)
+        run: |
+          python - <<'PY'
+          import sys, json
+          from tools.cache_tracer import ForensicLogger
+          res = ForensicLogger.verify_all('forensics/kv_cache.log')
+          print(json.dumps(res))
+          sys.exit(0 if res.get('ok') else 2)
+          PY
+
+      - name: Run eviction checker (enforce thresholds)
+        run: |
+          python tools/eviction_checker.py forensics/coverage.json --coverage-min 99.9 --unsanitized-max 0 --quarantine-max 0 --out forensics/verdict.json
+          cat forensics/verdict.json
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports-and-forensics-${{ matrix.os }}
+          path: |
+            reports/**
+            forensics/**
+
+  docker-images:
+    name: Build and push Docker images (CPU + CUDA)
+    runs-on: ubuntu-latest
+    needs: [test]
+    if: github.event_name != 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare tags
+        id: prep
+        run: |
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "repo=ghcr.io/${REPO_LOWER}" >> $GITHUB_OUTPUT
+          SHA_TAG=${GITHUB_SHA::12}
+          echo "sha=${SHA_TAG}" >> $GITHUB_OUTPUT
+
+      - name: Build and push CPU image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.cpu
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.prep.outputs.repo }}:cpu-latest
+            ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push CUDA image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.cuda
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.prep.outputs.repo }}:cuda-latest
+            ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
+          build-args: |
+            TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy scan (CPU)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
+          format: sarif
+          output: trivy-cpu.sarif
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+
+      - name: Trivy scan (CUDA)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
+          format: sarif
+          output: trivy-cuda.sarif
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-cpu.sarif
+        continue-on-error: true
+
+      - name: Upload Trivy results (CUDA)
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-cuda.sarif
+        continue-on-error: true
+
+      - name: Generate SBOM (Syft)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
+          artifact-name: sbom-cpu-${{ steps.prep.outputs.sha }}.spdx.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: |
+            sbom-*.spdx.json

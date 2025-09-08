@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model-server-with-tracer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: model-server
+  template:
+    metadata:
+      labels:
+        app: model-server
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 1000
+      containers:
+        - name: model-server
+          image: python:3.10-slim
+          command: ["bash", "-lc", "python -m http.server 8080"]
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "512Mi"
+          volumeMounts:
+            - name: forensics
+              mountPath: /app/forensics
+        - name: tracer-sidecar
+          image: llmops-kv-hygiene:cpu
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: FORENSIC_HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: forensic-hmac-secret
+                  key: FORENSIC_HMAC_SECRET
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          volumeMounts:
+            - name: forensics
+              mountPath: /app/forensics
+          ports:
+            - containerPort: 8000
+              name: http-metrics
+          command: ["bash", "-lc", "python tools/cache_tracer.py --demo --export-metrics forensics/coverage.json --export-prom forensics/metrics.prom && python tools/metrics_exporter.py"]
+      volumes:
+        - name: forensics
+          persistentVolumeClaim:
+            claimName: forensics-pvc

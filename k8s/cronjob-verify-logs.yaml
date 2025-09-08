@@ -1,0 +1,52 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kvhygiene-verify-logs
+  labels:
+    app: kvhygiene
+spec:
+  schedule: "0 2 * * *"  # daily at 02:00
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          serviceAccountName: kvhygiene-auditor
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+          containers:
+            - name: verifier
+              image: ghcr.io/example/kvhygiene:cpu-latest
+              imagePullPolicy: IfNotPresent
+              command: ["python", "-m", "tools.verify_logs"]
+              args:
+                - "--log-dir=/var/forensics"
+                - "--log-file=kv_cache.log"
+                - "--out=/var/forensics/verification.json"
+                - "--retention-days=30"
+                - "--max-rotated=20"
+                - "--archive-dir=/var/forensics/archive"
+              env:
+                - name: FORENSIC_HMAC_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: forensic-hmac
+                      key: key
+              volumeMounts:
+                - name: forensic-logs
+                  mountPath: /var/forensics
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+          volumes:
+            - name: forensic-logs
+              persistentVolumeClaim:
+                claimName: kvhygiene-forensics-pvc

@@ -1,0 +1,36 @@
+flowchart TD
+    %% KV-cache lifecycle: request -> allocate -> use -> sanitize -> attest -> free
+
+    subgraph Client
+        A[User Request\n(tenant_id, request_id)]
+    end
+
+    subgraph Inference Service
+        B[Allocate KV Buffers\nTag: tenant, request, model]
+        C[Bind to Stream\n(last writer stream)]
+        D[Decode Tokens\n(write K/V)]
+        E[Sanitize Start\n(cudaMemsetAsync/zero_())]
+        F[Sanitize End\ncoverage >= 99.9%]
+        G{Coverage OK?}
+        H[Quarantine Buffer\nDisable Reuse]
+        I[Free / Return to Pool]
+    end
+
+    subgraph Forensics & Audit
+        J[Forensic Logger\nappend-only, hash-chained]
+        K[Audit Sink\nread-only replication]
+    end
+
+    A --> B --> C --> D --> E --> F --> G
+    G -- Yes --> I
+    G -- No --> H --> I
+
+    %% Logging side-channel
+    B -. allocate .-> J
+    C -. bind .-> J
+    D -. write .-> J
+    E -. sanitize_start .-> J
+    F -. sanitize_end\ncoverage_pct .-> J
+    H -. quarantine .-> J
+    I -. free .-> J
+    J --> K

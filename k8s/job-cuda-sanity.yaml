@@ -1,0 +1,34 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cuda-sanity
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: cuda-sanity
+          image: llmops-kv-hygiene:cuda
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: FORENSIC_HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: forensic-hmac-secret
+                  key: FORENSIC_HMAC_SECRET
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: forensics
+              mountPath: /app/forensics
+          command: ["bash", "-lc", "pytest -q tests/test_cuda_async.py && python tools/cache_tracer.py --demo --export-metrics forensics/coverage.json --export-prom forensics/metrics.prom"]
+      volumes:
+        - name: forensics
+          persistentVolumeClaim:
+            claimName: forensics-pvc

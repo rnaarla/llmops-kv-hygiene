@@ -1,0 +1,33 @@
+version: "3.9"
+
+services:
+  tracer:
+    build:
+      context: .
+      dockerfile: Dockerfile.cpu
+    image: llmops-kv-hygiene:cpu
+    environment:
+      - FORENSIC_HMAC_SECRET=${FORENSIC_HMAC_SECRET:-}
+    volumes:
+      - ./forensics:/app/forensics
+    command: bash -lc "python -m pytest -q && python tools/cache_tracer.py --demo --export-metrics forensics/coverage.json --export-prom forensics/metrics.prom"
+
+  tracer-gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.cuda
+    image: llmops-kv-hygiene:cuda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    # Modern Compose GPU support
+    gpus: all
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - FORENSIC_HMAC_SECRET=${FORENSIC_HMAC_SECRET:-}
+    volumes:
+      - ./forensics:/app/forensics
+    command: bash -lc "pytest -q tests/test_cuda_async.py || true; python tools/cache_tracer.py --demo --export-metrics forensics/coverage.json --export-prom forensics/metrics.prom"
