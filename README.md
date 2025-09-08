@@ -3,7 +3,13 @@
 ![CI](https://github.com/${GITHUB_REPOSITORY:-owner/repo}/actions/workflows/ci.yml/badge.svg)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-Production-grade KV‑cache hygiene toolkit for LLM serving.
+Production‑grade KV‑cache hygiene for LLM serving: enforce zeroization, prove it, and gate it in CI/ops.
+
+Who is this for
+
+- Inference platform engineers running multi‑tenant LLMs
+- MLOps/SREs needing objective hygiene gates and dashboards
+- Compliance teams (SOC 2, HIPAA, FedRAMP) needing evidence trails
 
 Why this matters
 
@@ -20,11 +26,46 @@ What’s inside
 - Tests: unit/integration and a fuzz harness under `tests/`.
 - Architecture and principles: `architecture/` with overview and diagrams.
 
+How it looks
+
+```mermaid
+flowchart LR
+  A[Allocate/Tag] --> B[Mark In‑Use]
+  B --> C[Sanitize (Zeroize)]
+  C --> D[Verify (Sample/Double‑Pass)]
+  D --> E{Coverage ≥ Threshold?}
+  E -- Yes --> F[Free]
+  E -- No --> G[Quarantine]
+  A -.-> H[Forensic Log]
+  B -.-> H
+  C -.-> H
+  D -.-> H
+  F -.-> H
+  G -.-> H
+```
+
 How it works (high level)
 
 - Allocate and tag buffers per request/tenant → mark in‑use → zeroize on sanitize (CPU sync or CUDA stream/event‑aware) → verify via deterministic sampling → free only if coverage ≥ threshold (default 99.9%).
 - Every lifecycle event is written to a hash‑chained forensic log with optional HMAC. Log rotation emits a linkage record that references the previous file and its last hash.
 - Metrics summarize hygiene (unsanitized/quarantine counts, min/avg coverage, p50/p95 sanitize duration, reuse stats) for dashboards and gates.
+
+Guarantees and limits
+
+- Tamper‑evident logs: hash‑chained JSONL with optional HMAC; rotation linkage verified end‑to‑end.
+- Coverage gate: free only when attested coverage ≥ threshold (default 99.9%).
+- Verification: deterministic sampling; optional double‑pass for higher assurance.
+- Limits: cannot scrub memory not owned/managed by your runtime; configure TTL/reuse to match your serving model.
+
+Quickstart
+
+- Install (Python 3.11+):
+  - pip install -r requirements.txt
+- Run tests and generate metrics/prom textfile in forensics/:
+  - pytest -q
+  - python - <<'PY'\nfrom tools.cache_tracer import CacheTracer\nt=CacheTracer()\nh=t.allocate('t1','r1','m1',(256,),"float32",'cpu','numpy')\nt.mark_in_use(h); t.sanitize(h,async_=False,verify=True); t.free(h)\nt.export_metrics('forensics/coverage.json'); t.export_metrics_prometheus('forensics/metrics.prom')\nPY
+- Optional: enable pre‑commit hooks:
+  - pip install pre-commit && pre-commit install
 
 Setup
 
@@ -107,14 +148,100 @@ Compliance docs
 
 Notes and usage hints
 
-- CUDA: GPU paths require PyTorch with CUDA and a compatible driver; CUDA operations are async and synchronized via events/streams in `sanitize()/wait()`.
-- File perms: forensic logs are created with 0600 perms when possible; keep the log directory restricted.
-- Secrets: set `FORENSIC_HMAC_SECRET` via a secret manager (K8s Secret, CI secrets). Rotating the key will cause subsequent lines to use the new HMAC; verification accepts a single key at a time.
-- Retention: `verify_logs.py` prunes only rotated files; active `<stem>.log` remains. Consider offloading archives to object storage with lifecycle policies.
-- Tuning: for very large buffers, increase samples or enable double‑pass to harden verification.
+CacheTracer (CPU/GPU)
+
+- Call order: `allocate` → `mark_in_use` → `sanitize` (zeroize) → optional `wait` → `free`.
+- CPU mode uses NumPy; operations are synchronous.
+- CUDA mode (optional PyTorch): `sanitize(async_=True)` records an event; call `wait()` before asserting coverage or freeing. Streams/events are honored.
+- Verification controls: set `verify=True` on `sanitize`; adjust samples via env `KV_VERIFY_SAMPLES_DEFAULT`; enable double‑pass via `KV_DOUBLE_PASS_DEFAULT=true` for higher assurance.
+- Policies: TTL (`KV_DEFAULT_TTL_SEC`) and max reuse (`KV_DEFAULT_MAX_REUSE`). TTL ≤ 0 flags immediate violation on first use. Any violation quarantines the handle.
+- Coverage gate: free only when coverage ≥ `KV_COVERAGE_THRESHOLD` (default 99.9). Failing the gate raises and quarantines.
+- Handles are unique and thread‑safe; unknown or already‑freed handles raise.
+
+ForensicLogger (tamper‑evident logs)
+
+- Log is append‑only JSONL with a SHA‑256 hash chain; optional HMAC if `FORENSIC_HMAC_SECRET` is set.
+- Rotation emits a linkage marker referencing the previous file and last hash; `verify_all(path)` validates across rotations.
+- Treat logs as immutable; any line edit breaks the chain. Keep directory permissions restrictive; files are created with 0600 when possible.
+- Use `verify_chain(path)` for the active file, and `verify_all(path)` for full history.
+
+Metrics export
+
+- JSON: `export_metrics(path)` writes hygiene KPIs (coverage, durations, reuse/quarantine counts).
+- Prometheus textfile: `export_metrics_prometheus(path)` writes HELP/TYPE and metrics suitable for the node exporter textfile collector.
+- If multiple tracers run, write to distinct files and aggregate in your metrics pipeline.
+
+CLI gates and tools
+
+- Eviction checker: `python tools/eviction_checker.py <metrics.json> --coverage-min 99.9 --unsanitized-max 0 --quarantine-max 0`.
+  - Exit code 0 = pass, 2 = fail. Use in CI to block merges.
+- Verify logs + retention: `python -m tools.verify_logs --log-dir forensics --log-file kv_cache.log --out forensics/verification.json --retention-days 30 --max-rotated 20 [--archive-dir forensics/archive]`.
+  - Verifies integrity before and after pruning. Prunes only rotated files; active `<stem>.log` remains.
+- Metrics HTTP exporter (optional): `METRICS_FILE=forensics/metrics.prom METRICS_PORT=9101 python tools/metrics_exporter.py`.
+  - Serves the textfile over HTTP for simple scraping.
+
+CUDA specifics
+
+- Requires PyTorch with CUDA and a compatible driver. Operations are async; rely on events/streams and use `wait()` when asserting coverage.
+- Zeroization is bandwidth‑bound; verification sampling helps bound cost. For strict environments, enable double‑pass.
+
+Kubernetes
+
+- Mount a PVC at the forensic logs path for persistence. Provide `FORENSIC_HMAC_SECRET` via a Secret.
+- Schedule `k8s/cronjob-verify-logs.yaml` for periodic integrity checks and retention pruning.
+- CPU/GPU deployments are provided; ensure GPU nodes and drivers for CUDA images.
+
+Security and secrets
+
+- Set `FORENSIC_HMAC_SECRET` via a secret manager (K8s Secret/CI). Rotate keys periodically; subsequent lines use the new key. Verification assumes a single active key.
+- Restrict file permissions and directory access; avoid placing logs on world‑writable paths.
+
+Tuning and performance
+
+- Increase `KV_VERIFY_SAMPLES_DEFAULT` for stronger verification on large buffers; enable double‑pass when policy requires.
+- Keep coverage thresholds high (99.9% default). Lower only with explicit risk acceptance.
+- For high‑throughput GPU workloads, batch `wait()` calls to reduce synchronization overhead.
 
 Troubleshooting
 
 - Chain verification fails after manual edits: forensic logs are append‑only; editing any line breaks the chain. Recreate logs or keep unmodified.
 - Coverage below threshold: ensure sanitize is called and verification passes; adjust `KV_COVERAGE_THRESHOLD` only if policy allows.
 - CUDA hangs: check stream usage and ensure `wait()` is called to synchronize events; verify driver/toolkit compatibility.
+
+Core components
+
+- CacheTracer: in‑process allocation tagging, zeroization, verification, policy enforcement, and metrics.
+- ForensicLogger: append‑only, hash‑chained JSONL with optional HMAC and rotation linkage; `verify_chain`/`verify_all`.
+- Eviction checker: CLI gate for CI/CD that enforces hygiene thresholds from exported metrics.
+- Verify logs + retention: periodic integrity check and rotated log pruning; K8s CronJob provided.
+
+Operational gates and K8s
+
+- Prometheus textfile export for scrape/alerting.
+- CronJobs for eviction checks and forensic verification/retention.
+- CPU/CUDA images and manifests provided; mount PVC for logs and set `FORENSIC_HMAC_SECRET` via Secret.
+
+Performance considerations
+
+- Zeroization is O(n); verification sampling cost scales with samples chosen.
+- CUDA paths are async; use `wait()` to synchronize when asserting coverage.
+- Double‑pass increases confidence at the cost of extra write/verify cycles.
+
+Security and compliance
+
+- Secrets: provide `FORENSIC_HMAC_SECRET` via secret manager (K8s Secret/CI). Rotate periodically.
+- Evidence: compliance mappings under `compliance/` reference logs, metrics, and CI artifacts as evidence.
+
+Roadmap (short)
+
+- Strict mypy typing gate (enable incrementally)
+- SBOM publication badge and automated dependency update policy
+- Optional write‑once log sink adapter (e.g., object storage with immutability)
+
+License
+
+MIT © Contributors. See `LICENSE`.
+
+Contributing
+
+See `CONTRIBUTING.md`. For security issues, see `SECURITY.md`.
