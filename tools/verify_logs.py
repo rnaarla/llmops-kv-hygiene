@@ -3,15 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
 import sys
 import time
-from typing import Optional, List
+from pathlib import Path
 
 from .forensic_logger import ForensicLogger
 
 
-def verify_all_and_write(log_path: Path, out_path: Optional[Path] = None) -> dict:
+def verify_all_and_write(log_path: Path, out_path: Path | None = None) -> dict:
     res = ForensicLogger.verify_all(str(log_path))
     payload = {
         "schema": 1,
@@ -29,15 +28,15 @@ def verify_all_and_write(log_path: Path, out_path: Optional[Path] = None) -> dic
 def prune_rotated(
     log_path: Path,
     *,
-    retention_days: Optional[int] = None,
-    max_rotated: Optional[int] = None,
-    archive_dir: Optional[Path] = None,
-) -> List[str]:
+    retention_days: int | None = None,
+    max_rotated: int | None = None,
+    archive_dir: Path | None = None,
+) -> list[str]:
     """Prune rotated logs based on age or count. Returns list of removed file names.
 
     Rotated files are named '<stem>-<ts>.log'. Active file '<stem>.log' is never removed.
     """
-    removed: List[str] = []
+    removed: list[str] = []
     base = log_path
     stem = base.stem
     directory = base.parent
@@ -59,7 +58,7 @@ def prune_rotated(
                     dest = archive_dir / p.name
                     p.replace(dest)
                 else:
-                    p.unlink(missing_ok=True)  # type: ignore[arg-type]
+                    p.unlink(missing_ok=True)
                 removed.append(p.name)
                 rotated.remove(p)
 
@@ -72,42 +71,32 @@ def prune_rotated(
                 dest = archive_dir / p.name
                 p.replace(dest)
             else:
-                p.unlink(missing_ok=True)  # type: ignore[arg-type]
+                p.unlink(missing_ok=True)
             removed.append(p.name)
         # Not strictly needed to update list further
 
     return removed
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Verify forensic logs integrity and enforce retention"
     )
-    parser.add_argument(
-        "--log-dir", default=os.environ.get("LOG_DIR", "/var/forensics")
-    )
-    parser.add_argument(
-        "--log-file", default=os.environ.get("LOG_FILE", "kv_cache.log")
-    )
-    parser.add_argument(
-        "--out", default=os.environ.get("VERDICT_OUT", "verification.json")
-    )
+    parser.add_argument("--log-dir", default=os.environ.get("LOG_DIR", "/var/forensics"))
+    parser.add_argument("--log-file", default=os.environ.get("LOG_FILE", "kv_cache.log"))
+    parser.add_argument("--out", default=os.environ.get("VERDICT_OUT", "verification.json"))
     parser.add_argument(
         "--retention-days",
         type=int,
         default=lambda: (
-            int(os.environ.get("RETENTION_DAYS", "0"))
-            if os.environ.get("RETENTION_DAYS")
-            else None
+            int(os.environ.get("RETENTION_DAYS", "0")) if os.environ.get("RETENTION_DAYS") else None
         ),
     )
     parser.add_argument(
         "--max-rotated",
         type=int,
         default=lambda: (
-            int(os.environ.get("MAX_ROTATED", "0"))
-            if os.environ.get("MAX_ROTATED")
-            else None
+            int(os.environ.get("MAX_ROTATED", "0")) if os.environ.get("MAX_ROTATED") else None
         ),
     )
     parser.add_argument("--archive-dir", default=os.environ.get("ARCHIVE_DIR"))

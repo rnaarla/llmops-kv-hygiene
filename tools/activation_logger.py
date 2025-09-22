@@ -7,18 +7,20 @@ flagging outliers. Intended for runtime monitoring during tests/fuzzing.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
 import json
-from pathlib import Path
 import math
-import time
 import threading
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
-try:
-    import torch  # type: ignore
+from typing import Any
+try:  # pragma: no cover - optional
+    import torch as _torch  # noqa: F401
+    torch: Any = _torch
 except Exception:  # pragma: no cover
-    torch = None  # type: ignore
+    torch = None
 
 
 @dataclass
@@ -26,6 +28,7 @@ class ActivationStats:
     count: int = 0
     mean: float = 0.0
     m2: float = 0.0  # sum of squares of differences from the current mean
+    _last_log_ts: float = 0.0  # rate limiting timestamp
 
     def update(self, x: float) -> None:
         self.count += 1
@@ -54,17 +57,17 @@ class ActivationLogger:
         self.path = Path(out_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.z_threshold = z_threshold
-        self._stats: Dict[str, ActivationStats] = {}
+        self._stats: dict[str, ActivationStats] = {}
         self._lock = threading.Lock()
 
     def _record(
         self,
         layer: str,
-        values: Tuple[float, float, float, int],
+        values: tuple[float, float, float, int],
         *,
         anomalous: bool,
-        tenant_id: Optional[str] = None,
-        request_id: Optional[str] = None,
+        tenant_id: str | None = None,
+        request_id: str | None = None,
     ) -> None:
         ts = time.time()
         rec = {
@@ -90,9 +93,9 @@ class ActivationLogger:
         layer: str,
         tensor: Any,
         *,
-        tenant_id: Optional[str] = None,
-        request_id: Optional[str] = None,
-        rate_limit_hz: Optional[float] = 10.0,
+        tenant_id: str | None = None,
+        request_id: str | None = None,
+        rate_limit_hz: float | None = 10.0,
     ) -> bool:
         """Observe an activation tensor and log anomalies with optional rate limiting.
 
@@ -105,19 +108,15 @@ class ActivationLogger:
             max_val = float(t.abs().max().item()) if t.numel() > 0 else 0.0
             numel = int(t.numel())
         else:
-            try:  # type: ignore[index]
+            try:
                 mean, std, max_val, numel = (
                     float(tensor[0]),
                     float(tensor[1]),
                     float(tensor[2]),
                     int(tensor[3]),
                 )
-            except (
-                Exception
-            ) as e:  # pragma: no cover - defensive unreachable with current tests
-                raise TypeError(
-                    "Unsupported tensor type for ActivationLogger.observe"
-                ) from e
+            except Exception as e:  # pragma: no cover - defensive unreachable with current tests
+                raise TypeError("Unsupported tensor type for ActivationLogger.observe") from e
 
         key = layer
         with self._lock:
@@ -132,12 +131,10 @@ class ActivationLogger:
                 min_dt = 1.0 / rate_limit_hz
                 allow = (now - rl_attr) >= min_dt
             if allow:
-                setattr(stats, "_last_log_ts", now)
+                stats._last_log_ts = now
 
         z = 0.0 if baseline_std == 0.0 else abs(mean - baseline_mean) / baseline_std
-        anomalous = z > self.z_threshold or max_val > (
-            baseline_mean + 10 * (baseline_std or 1.0)
-        )
+        anomalous = z > self.z_threshold or max_val > (baseline_mean + 10 * (baseline_std or 1.0))
         if allow:
             self._record(
                 layer,
@@ -152,7 +149,7 @@ class ActivationLogger:
 if __name__ == "__main__":  # pragma: no cover - manual smoke path
     if torch is not None:  # pragma: no cover - exercised only manually
         logger = ActivationLogger()
-        for i in range(100):
+        for _i in range(100):
             x = torch.randn(1024)
             logger.observe("layer1", x)
         x = torch.randn(1024) * 100.0
@@ -160,6 +157,6 @@ if __name__ == "__main__":  # pragma: no cover - manual smoke path
         print("Anomalous?", flagged)
     else:  # pragma: no cover
         logger = ActivationLogger()
-        for i in range(5):
+        for _i in range(5):
             logger.observe("layer1", (0.0, 1.0, 3.0, 1024))
         print("Logged without torch")

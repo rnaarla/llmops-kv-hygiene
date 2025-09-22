@@ -1,9 +1,9 @@
 import pytest
 
 try:
-    import torch  # type: ignore
+    import torch
 except Exception:  # pragma: no cover
-    torch = None  # type: ignore
+    torch = None
 
 from tools.cache_tracer import CacheTracer
 

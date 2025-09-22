@@ -1,5 +1,6 @@
 import time
-from tools.policies import evaluate_policies, check_ttl, check_reuse
+
+from tools.policies import check_reuse, check_ttl, evaluate_policies
 
 
 def test_check_ttl_immediate_violation():

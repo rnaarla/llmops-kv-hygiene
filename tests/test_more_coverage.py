@@ -1,6 +1,4 @@
 import json
-import os
-import time
 from pathlib import Path
 
 import pytest
@@ -9,9 +7,9 @@ from tools.cache_tracer import CacheTracer
 from tools.forensic_logger import ForensicLogger
 
 try:
-    import numpy as np  # type: ignore
+    import numpy as np
 except Exception:  # pragma: no cover
-    np = None  # type: ignore
+    np = None
 
 
 def test_double_pass_branch(tmp_path, monkeypatch):
@@ -72,7 +70,9 @@ def test_forensic_logger_malformed_tail(tmp_path):
     except json.JSONDecodeError:
         pass  # Acceptable: malformed line caused decode error during verify_chain
     # Ensure the malformed marker exists in at least one rotated file to confirm we exercised the path
-    rotated_with_marker = [p for p in tmp_path.glob("rot-*.log") if "{malformed" in p.read_text()]  # noqa: PLR2004
+    rotated_with_marker = [
+        p for p in tmp_path.glob("rot-*.log") if "{malformed" in p.read_text()
+    ]  # noqa: PLR2004
     assert rotated_with_marker, "Expected at least one rotated file containing malformed tail line"
 
 
@@ -93,7 +93,11 @@ def test_verify_all_missing_rotate_record(tmp_path):
         log_path.write_text("\n".join(active_lines[1:]) + "\n")
     res = ForensicLogger.verify_all(str(log_path))
     # Expect at least one file entry with missing rotate record error OR rotation mismatch
-    errors = [f for f in res.get("files", []) if f.get("error") in {"missing rotate record", "rotation linkage mismatch"}]
+    errors = [
+        f
+        for f in res.get("files", [])
+        if f.get("error") in {"missing rotate record", "rotation linkage mismatch"}
+    ]
     assert errors, f"Expected linkage related error entries. Result: {res}"
 
 
@@ -109,7 +113,7 @@ def test_hmac_mismatch_detection(tmp_path, monkeypatch):
         pytest.skip("no lines to tamper")
     obj = json.loads(lines[-1])
     # Recompute correct hash then alter only hmac
-    curr = obj["curr_hash"]
+    _curr_hash = obj["curr_hash"]  # retained for clarity; value intentionally replaced
     obj["hmac"] = "deadbeef" * 4
     lines[-1] = json.dumps(obj)
     log_path.write_text("\n".join(lines) + "\n")

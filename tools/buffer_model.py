@@ -1,7 +1,8 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+
 import time
+from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -11,28 +12,26 @@ class KVBuffer:
     request_id: str
     model_id: str
     device: str  # e.g., 'cpu', 'cuda:0'
-    shape: Tuple[int, ...]
+    shape: tuple[int, ...]
     dtype: str
-    ptr: Optional[int]
+    ptr: int | None
     nbytes: int
     created_ts: float = field(default_factory=time.time)
-    stream_id: Optional[str] = None
-    status: str = (
-        "allocated"  # allocated|bound|in_use|sanitizing|sanitized|freed|quarantined
-    )
+    stream_id: str | None = None
+    status: str = "allocated"  # allocated|bound|in_use|sanitizing|sanitized|freed|quarantined
     scrubbed_bytes: int = 0
-    sanitize_start_ts: Optional[float] = None
-    sanitize_end_ts: Optional[float] = None
+    sanitize_start_ts: float | None = None
+    sanitize_end_ts: float | None = None
     coverage_pct: float = 0.0
-    notes: Dict[str, Any] = field(default_factory=dict)
+    notes: dict[str, Any] = field(default_factory=dict)
     _tensor: Any = None  # torch.Tensor or np.ndarray
     pinned: bool = False
     reuse_count: int = 0
-    first_use_ts: Optional[float] = None
-    last_use_ts: Optional[float] = None
-    ttl_sec: Optional[float] = None
-    max_reuse: Optional[int] = None
+    first_use_ts: float | None = None
+    last_use_ts: float | None = None
+    ttl_sec: float | None = None
+    max_reuse: int | None = None
     stream_obj: Any = None
     event_obj: Any = None
-    verify_samples: List[int] = field(default_factory=list)
-    sanitize_duration_ms: Optional[float] = None
+    verify_samples: list[int] = field(default_factory=list)
+    sanitize_duration_ms: float | None = None

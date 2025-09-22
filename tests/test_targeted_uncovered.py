@@ -1,15 +1,15 @@
-import json
-import pytest
 from types import SimpleNamespace
 
+import pytest
+
 from tools import sanitizer as sanitizer_mod
-from tools.forensic_logger import ForensicLogger
 from tools.cache_tracer import CacheTracer
+from tools.forensic_logger import ForensicLogger
 
 try:  # optional deps
-    import numpy as np  # type: ignore
+    import numpy as np
 except Exception:  # pragma: no cover
-    np = None  # type: ignore
+    np = None
 
 
 def _make_buf(size: int = 8):
@@ -23,6 +23,7 @@ def test_zeroize_cpu_numpy_error_branch(monkeypatch):
     if np is None:
         pytest.skip("NumPy not available")
     base = _make_buf(4)
+
     # Create proxy object exposing .fill which raises to exercise exception branch in zeroize_cpu
     class Proxy:
         def __init__(self, arr):
@@ -64,7 +65,15 @@ def test_cache_tracer_quarantine_on_low_coverage(monkeypatch, tmp_path):
     # Force coverage threshold very high to trigger quarantine path on free
     monkeypatch.setenv("KV_COVERAGE_THRESHOLD", "150.0")
     tracer = CacheTracer(log_path=str(tmp_path / "kv_cache.log"))
-    h = tracer.allocate(tenant_id="t", request_id="r", model_id="m", shape=(2,), dtype="float32", device="cpu", framework="numpy")
+    h = tracer.allocate(
+        tenant_id="t",
+        request_id="r",
+        model_id="m",
+        shape=(2,),
+        dtype="float32",
+        device="cpu",
+        framework="numpy",
+    )
     tracer.mark_in_use(h)
     tracer.sanitize(h, async_=False, verify=True)
     # Coverage will be 100 < 150 threshold, so free should quarantine and raise exception
@@ -77,7 +86,16 @@ def test_cache_tracer_quarantine_on_low_coverage(monkeypatch, tmp_path):
 def test_policy_ttl_violation(monkeypatch, tmp_path):
     tracer = CacheTracer(log_path=str(tmp_path / "kv_cache.log"))
     # allocate with ttl of 0 to force immediate violation on first write
-    h = tracer.allocate(tenant_id="t", request_id="r", model_id="m", shape=(2,), dtype="float32", device="cpu", framework="numpy", ttl_sec=0)
+    h = tracer.allocate(
+        tenant_id="t",
+        request_id="r",
+        model_id="m",
+        shape=(2,),
+        dtype="float32",
+        device="cpu",
+        framework="numpy",
+        ttl_sec=0,
+    )
     tracer.mark_in_use(h)
     # After mark_in_use, ttl violation should have quarantined buffer
     assert tracer._get(h).status == "quarantined"  # coverage for ttl violation branch

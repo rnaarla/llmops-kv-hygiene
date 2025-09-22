@@ -1,19 +1,22 @@
 from __future__ import annotations
-from typing import Any, List, Optional
-import time
+
 import random
+import time
+from typing import Any
 
+# Optional dependencies treated as Any when absent to simplify typing
 try:  # pragma: no cover - optional dependency
-    import numpy as np  # type: ignore
+    import numpy as _np  # noqa: F401
+    np: Any = _np
 except Exception:  # pragma: no cover
-    np = None  # type: ignore
-
+    np = None
 try:  # pragma: no cover - optional dependency
-    import torch  # type: ignore
+    import torch as _torch  # noqa: F401
+    torch: Any = _torch
 except Exception:  # pragma: no cover
-    torch = None  # type: ignore
+    torch = None
 
-RNG = random.Random()
+RNG = random.Random()  # noqa: S311 - non-crypto RNG sufficient for sampling
 
 
 class SanitizationResult:
@@ -25,13 +28,14 @@ class SanitizationResult:
         self.coverage_pct = coverage_pct
 
 
-def _sample_indices(n: int, samples: int) -> List[int]:
+def _sample_indices(n: int, samples: int) -> list[int]:
     if samples <= 0:
         return []
     if samples >= n:
         return list(range(n))
     # Stable deterministic sample: shuffle seeded by n & samples
-    local = random.Random(n * 31 + samples * 17)
+    # Non-cryptographic deterministic sample selection; seed mixes size & sample count
+    local = random.Random(n * 31 + samples * 17)  # noqa: S311
     return sorted(local.sample(range(n), samples))
 
 
@@ -78,7 +82,7 @@ def zeroize_cpu(buf: Any) -> int:
 
 def zeroize_cuda(buf: Any, async_: bool) -> bool:
     if torch is None or not isinstance(
-        buf._tensor, type(getattr(torch, "tensor")([0]))
+        buf._tensor, type(torch.tensor([0]))
     ):  # pragma: no cover - no torch
         return False
     t = buf._tensor
@@ -90,7 +94,7 @@ def zeroize_cuda(buf: Any, async_: bool) -> bool:
         return False
 
 
-def verify_zero(buf: Any, samples: Optional[int]) -> bool:
+def verify_zero(buf: Any, samples: int | None) -> bool:
     if samples is None or samples <= 0:
         return True
     tensor = buf._tensor
@@ -101,25 +105,19 @@ def verify_zero(buf: Any, samples: Optional[int]) -> bool:
         flat = tensor.reshape(-1)
         idxs = _sample_indices(flat.size, samples)
         return all(flat[i] == 0 for i in idxs)
-    if torch is not None and hasattr(
-        tensor, "numel"
-    ):  # pragma: no cover - GPU/torch path optional
+    if torch is not None and hasattr(tensor, "numel"):  # pragma: no cover - GPU/torch path optional
         flat = tensor.view(-1)
         idxs = _sample_indices(flat.numel(), samples)
         return all(flat[i].item() == 0 for i in idxs)
     return True
 
 
-def sanitize_sync(
-    buf: Any, *, verify: bool, samples: Optional[int]
-) -> SanitizationResult:
+def sanitize_sync(buf: Any, *, verify: bool, samples: int | None) -> SanitizationResult:
     start = time.time()
     scrubbed = 0
     if buf.device.startswith("cuda"):
         scheduled = zeroize_cuda(buf, async_=False)
-        if (
-            scheduled
-        ):  # pragma: no cover - branch not expected with simplified zeroization
+        if scheduled:  # pragma: no cover - branch not expected with simplified zeroization
             pass
         # For simplicity CUDA path returns full logical size if tensor exists
         tensor = buf._tensor

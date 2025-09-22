@@ -6,10 +6,9 @@ from http.client import HTTPConnection
 
 import pytest
 
-from tools.cache_tracer import CacheTracer, ForensicLogger
-from tools.cache_tracer import UnknownHandle
-from tools.eviction_checker import main as eviction_main
 from tools.activation_logger import ActivationLogger
+from tools.cache_tracer import CacheTracer, ForensicLogger, UnknownHandle
+from tools.eviction_checker import main as eviction_main
 from tools.verify_logs import prune_rotated, verify_all_and_write
 
 
@@ -250,9 +249,7 @@ def test_prune_archive_branch(tmp_path):
     archive = tmp_path / "archive"
     from tools.verify_logs import prune_rotated
 
-    removed = prune_rotated(
-        log_path, retention_days=0, max_rotated=1, archive_dir=archive
-    )
+    removed = prune_rotated(log_path, retention_days=0, max_rotated=1, archive_dir=archive)
     assert removed
     # ensure archived files exist
     assert any((archive / name).exists() for name in removed)
@@ -337,9 +334,7 @@ def test_metrics_exporter_empty_file(monkeypatch, tmp_path):
     monkeypatch.setenv("METRICS_PORT", str(port))
     from tools import metrics_exporter  # type: ignore
 
-    server = metrics_exporter.HTTPServer(
-        (metrics_exporter.BIND, port), metrics_exporter.Handler
-    )
+    server = metrics_exporter.HTTPServer((metrics_exporter.BIND, port), metrics_exporter.Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     time.sleep(0.05)
@@ -482,9 +477,7 @@ def test_hmac_mismatch_detection(tmp_path, monkeypatch):
     tracer.sanitize(h, async_=False, verify=True)
     tracer.free(h)
     # Verification with wrong secret should fail
-    res = ForensicLogger.verify_chain(
-        str(tmp_path / "kv_cache.log"), hmac_secret=b"wrong"
-    )
+    res = ForensicLogger.verify_chain(str(tmp_path / "kv_cache.log"), hmac_secret=b"wrong")
     assert not res["ok"]
 
 

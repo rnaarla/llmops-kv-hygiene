@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import logging
 import os
 import threading
 import time
 import uuid
-import hmac
+from collections.abc import Mapping, MutableMapping
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Union
+from typing import Any
 
 
 class ForensicLogger:
@@ -21,10 +23,10 @@ class ForensicLogger:
 
     def __init__(
         self,
-        log_path: Union[str, Path],
+        log_path: str | Path,
         *,
         max_bytes: int = 5_000_000,
-        hmac_secret: Optional[bytes] = None,
+        hmac_secret: bytes | None = None,
     ) -> None:
         self.path = Path(log_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -33,21 +35,17 @@ class ForensicLogger:
             try:
                 os.chmod(self.path, 0o600)
             except Exception:  # pragma: no cover - permission hardening fallback
-                pass
+                logging.debug("chmod hardening failed", exc_info=True)
         self._lock = threading.Lock()
         self._prev_hash = self._load_last_hash()
         self._max_bytes = max_bytes
         self._hmac_key = (
-            hmac_secret
-            or os.environ.get("FORENSIC_HMAC_SECRET", "").encode("utf-8")
-            or None
+            hmac_secret or os.environ.get("FORENSIC_HMAC_SECRET", "").encode("utf-8") or None
         )
 
     @staticmethod
     def _canonicalize(record: Mapping[str, Any]) -> str:
-        return json.dumps(
-            record, sort_keys=True, ensure_ascii=False, separators=(",", ":")
-        )
+        return json.dumps(record, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
     def _load_last_hash(self) -> str:
         if not self.path.exists():  # pragma: no branch
@@ -67,12 +65,13 @@ class ForensicLogger:
                         obj = json.loads(line)
                         return obj.get("curr_hash", "GENESIS")
                     except Exception:  # pragma: no cover - ignores malformed tail line
+                        logging.debug("malformed tail line during last hash scan", exc_info=True)
                         continue
         except Exception:  # pragma: no cover - IO failure fallback
-            pass
+            logging.debug("IO failure reading last hash", exc_info=True)
         return "GENESIS"
 
-    def _load_last_hash_from(self, path: Union[str, Path]) -> str:
+    def _load_last_hash_from(self, path: str | Path) -> str:
         p = Path(path)
         if not p.exists():  # pragma: no branch
             return "GENESIS"
@@ -91,9 +90,10 @@ class ForensicLogger:
                         obj = json.loads(line)
                         return obj.get("curr_hash", "GENESIS")
                     except Exception:  # pragma: no cover
+                        logging.debug("malformed tail line (specific file)", exc_info=True)
                         continue
         except Exception:  # pragma: no cover - IO failure fallback
-            pass
+            logging.debug("IO failure reading specific file last hash", exc_info=True)
         return "GENESIS"
 
     def append(self, record: MutableMapping[str, Any]) -> str:
@@ -103,9 +103,7 @@ class ForensicLogger:
             record.setdefault("trace_id", str(uuid.uuid4()))
             record["prev_hash"] = self._prev_hash
             canonical = self._canonicalize(record)
-            curr_hash = hashlib.sha256(
-                (self._prev_hash + canonical).encode("utf-8")
-            ).hexdigest()
+            curr_hash = hashlib.sha256((self._prev_hash + canonical).encode("utf-8")).hexdigest()
             record["curr_hash"] = curr_hash
             if self._hmac_key:
                 record["hmac"] = hmac.new(
@@ -114,13 +112,8 @@ class ForensicLogger:
                     hashlib.sha256,
                 ).hexdigest()
             line = json.dumps(record, ensure_ascii=False)
-            if (
-                self.path.exists()
-                and self.path.stat().st_size + len(line) + 1 > self._max_bytes
-            ):
-                rotated = self.path.with_name(
-                    self.path.stem + f"-{int(time.time())}.log"
-                )
+            if self.path.exists() and self.path.stat().st_size + len(line) + 1 > self._max_bytes:
+                rotated = self.path.with_name(self.path.stem + f"-{int(time.time())}.log")
                 self.path.rename(rotated)
                 prev_file_last_hash = self._load_last_hash_from(rotated)
                 self._prev_hash = "GENESIS"
@@ -149,7 +142,7 @@ class ForensicLogger:
                 try:
                     os.chmod(self.path, 0o600)
                 except Exception:  # pragma: no cover
-                    pass
+                    logging.debug("chmod post-rotation failed", exc_info=True)
                 self._prev_hash = rotate_hash
                 record.pop("curr_hash", None)
                 record.pop("hmac", None)
@@ -172,18 +165,12 @@ class ForensicLogger:
             return curr_hash
 
     @staticmethod
-    def verify_chain(
-        path: Union[str, Path], *, hmac_secret: Optional[bytes] = None
-    ) -> Dict[str, Any]:
+    def verify_chain(path: str | Path, *, hmac_secret: bytes | None = None) -> dict[str, Any]:
         prev = "GENESIS"
         ok = True
         count = 0
-        bad_index: Optional[int] = None
-        key = (
-            hmac_secret
-            or os.environ.get("FORENSIC_HMAC_SECRET", "").encode("utf-8")
-            or None
-        )
+        bad_index: int | None = None
+        key = hmac_secret or os.environ.get("FORENSIC_HMAC_SECRET", "").encode("utf-8") or None
         with Path(path).open("r", encoding="utf-8") as f:
             for i, line in enumerate(f):
                 if not line.strip():
@@ -214,13 +201,13 @@ class ForensicLogger:
         return {"ok": ok, "lines": count, "first_bad_line": bad_index}
 
     @staticmethod
-    def verify_all(path: Union[str, Path]) -> Dict[str, Any]:
+    def verify_all(path: str | Path) -> dict[str, Any]:
         base = Path(path)
         directory = base.parent
         stem = base.stem
         rotated = sorted(directory.glob(f"{stem}-*.log"), key=lambda p: p.name)
         files = rotated + [base]
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         ok = True
 
         def _last_hash(p: Path) -> str:
@@ -239,10 +226,10 @@ class ForensicLogger:
                         if ch:
                             return ch
             except Exception:  # pragma: no cover
-                pass
+                logging.debug("_last_hash helper failed", exc_info=True)
             return "GENESIS"
 
-        def _first_rotate_record(p: Path) -> Optional[Dict[str, Any]]:
+        def _first_rotate_record(p: Path) -> dict[str, Any] | None:
             try:
                 with p.open("r", encoding="utf-8") as f:
                     for line in f:
@@ -253,6 +240,7 @@ class ForensicLogger:
                             return obj
                         break
             except Exception:  # pragma: no cover
+                logging.debug("_first_rotate_record helper failed", exc_info=True)
                 return None
             return None
 
@@ -281,9 +269,7 @@ class ForensicLogger:
             expected_hash = _last_hash(prev)
             r_prev_file = rotate.get("prev_file")
             r_prev_hash = rotate.get("prev_file_last_hash")
-            if (
-                r_prev_file == curr.name and r_prev_hash == expected_hash
-            ):  # benign self reference
+            if r_prev_file == curr.name and r_prev_hash == expected_hash:  # benign self reference
                 pass
             elif r_prev_file != expected_name or r_prev_hash != expected_hash:
                 ok = False

@@ -1,13 +1,13 @@
 import types
+
 import pytest
-from types import SimpleNamespace
 
 from tools.cache_tracer import CacheTracer
 
 try:  # optional torch simulation if real torch absent
-    import torch  # type: ignore
+    import torch
 except Exception:  # pragma: no cover
-    torch = None  # type: ignore
+    torch = None
 
 
 class FakeEvent:
@@ -71,4 +71,3 @@ def test_sanitize_async_and_wait_simulated(async_flag):
     assert cov >= 0.0
     # Ensure event synchronize was invoked
     assert buf.event_obj.synchronized is True
-

@@ -18,9 +18,12 @@ BIND = os.environ.get("METRICS_BIND", "0.0.0.0")
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         # quiet
+        try:
+            msg = format % args
+        except Exception:
+            msg = format
         sys.stderr.write(
-            "%s - - [%s] %s\n"
-            % (self.address_string(), self.log_date_time_string(), format % args)
+            f"{self.address_string()} - - [{self.log_date_time_string()}] {msg}\n"
         )
 
     def do_GET(self):
@@ -43,7 +46,5 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":  # pragma: no cover - integration path
     httpd = HTTPServer((BIND, PORT), Handler)
-    print(
-        f"serving metrics from {METRICS_FILE} on {BIND}:{PORT} at /metrics", flush=True
-    )
+    print(f"serving metrics from {METRICS_FILE} on {BIND}:{PORT} at /metrics", flush=True)
     httpd.serve_forever()

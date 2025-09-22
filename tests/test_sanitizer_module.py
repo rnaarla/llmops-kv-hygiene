@@ -1,6 +1,6 @@
-import pytest
-
 from types import SimpleNamespace
+
+import pytest
 
 from tools import sanitizer as sanitizer_mod
 

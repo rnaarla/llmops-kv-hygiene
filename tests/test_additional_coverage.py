@@ -1,16 +1,16 @@
 import json
 import os
-import time
 import subprocess
 import sys
+import time
 from http.client import HTTPConnection
 
 import pytest  # noqa: F401  # Left for potential future parametrization
 
+from tools.activation_logger import ActivationLogger
 from tools.cache_tracer import CacheTracer, ForensicLogger
 from tools.eviction_checker import main as eviction_main
 from tools.verify_logs import prune_rotated, verify_all_and_write
-from tools.activation_logger import ActivationLogger
 
 
 def test_verify_logs_retention_archive(tmp_path, monkeypatch):
@@ -50,9 +50,7 @@ def test_verify_logs_retention_archive(tmp_path, monkeypatch):
         os.utime(mal_dest, (time.time() - 5 * 86400, time.time() - 5 * 86400))
     archive_dir = tmp_path / "arch"
     # Age+count pruning with archive (should remove old & malformed)
-    removed = prune_rotated(
-        log_path, retention_days=1, max_rotated=1, archive_dir=archive_dir
-    )
+    removed = prune_rotated(log_path, retention_days=1, max_rotated=1, archive_dir=archive_dir)
     assert removed, "Expected some rotated files to be archived or removed"
     assert archive_dir.exists()
     res_after = verify_all_and_write(log_path)
@@ -134,7 +132,7 @@ def test_metrics_exporter_content_length_and_empty(tmp_path, monkeypatch):
         assert resp.status == 200
         assert resp.getheader("Content-Length") == str(len(data))
         # Delete file and request again (empty path)
-        prom.unlink(missing_ok=True)  # type: ignore[arg-type]
+        prom.unlink(missing_ok=True)
         time.sleep(0.05)
         conn2 = HTTPConnection("127.0.0.1", port)
         conn2.request("GET", "/metrics")
@@ -154,9 +152,7 @@ def test_activation_logger_anomaly_variants(tmp_path):
     logger = ActivationLogger(out_path=str(tmp_path / "acts.jsonl"), z_threshold=1.0)
     # Establish baseline
     for _ in range(10):
-        logger.observe(
-            "L1", (0.0, 0.0, 0.0, 4), rate_limit_hz=None
-        )  # no rate limit so all logged
+        logger.observe("L1", (0.0, 0.0, 0.0, 4), rate_limit_hz=None)  # no rate limit so all logged
     # z-score anomaly: sudden mean shift
     logger.observe("L1", (50.0, 0.0, 50.0, 4), rate_limit_hz=None)
     # max_val anomaly with zero std baseline (new layer)

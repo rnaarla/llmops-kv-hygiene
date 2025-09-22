@@ -25,306 +25,54 @@ Notes:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple, Union, Iterable
 import json
+import logging
 import math
 import os
-from pathlib import Path
 import threading
 import time
 import uuid
-import logging
+from collections.abc import Iterable
+from pathlib import Path
+from typing import Any
 
-from .forensic_logger import ForensicLogger
+from . import sanitizer as sanitizer_mod
 from .buffer_model import KVBuffer
+from .forensic_logger import ForensicLogger
 
 # percentile imported elsewhere when needed; local implementation uses _percentile
 from .policies import evaluate_policies
-from . import sanitizer as sanitizer_mod
 
 # Optional deps
-try:
-    import numpy as np  # type: ignore
+try:  # pragma: no cover - optional dependency
+    import numpy as _np  # noqa: F401
+    np: Any = _np
 except Exception:  # pragma: no cover
-    np = None  # type: ignore
-
-try:
-    import torch  # type: ignore
+    np = None
+try:  # pragma: no cover - optional dependency
+    import torch as _torch  # noqa: F401
+    torch: Any = _torch
 except Exception:  # pragma: no cover
-    torch = None  # type: ignore
+    torch = None
 
 
 # ----- Exceptions -----
-class HygieneViolation(Exception):
-    pass
+class HygieneViolationError(Exception):
+    """Generic hygiene policy violation."""
 
 
-class UnknownHandle(Exception):
-    pass
+class UnknownHandleError(Exception):
+    """Raised when an unknown or freed handle is referenced."""
 
 
-class FreeWithoutSanitize(HygieneViolation):
-    pass
+class FreeWithoutSanitizeError(HygieneViolationError):
+    """Raised when attempting to free a buffer below coverage threshold."""
 
 
-# ---------- Tamper-evident append-only logger ----------
-# class ForensicLogger:
-#     """Append-only, hash-chained JSONL logger.
-#
-#     Each record is canonicalized and linked using SHA256(prev_hash + canonical_json).
-#     The file is append-only; previous lines are never modified.
-#     Supports optional HMAC signing and basic size-based log rotation.
-#     """
-#
-#     def __init__(self, log_path: Union[str, Path], *, max_bytes: int = 5_000_000, hmac_secret: Optional[bytes] = None) -> None:
-#         self.path = Path(log_path)
-#         self.path.parent.mkdir(parents=True, exist_ok=True)
-#         # Ensure file exists with restricted perms
-#         if not self.path.exists():
-#             self.path.touch()
-#             try:
-#                 os.chmod(self.path, 0o600)
-#             except Exception:  # pragma: no cover - tail parse failure
-#                 pass
-#         self._lock = threading.Lock()
-#         self._prev_hash = self._load_last_hash()
-#         self._max_bytes = max_bytes
-#         # Secret can also be provided via env FORENSIC_HMAC_SECRET
-#         self._hmac_key = hmac_secret or os.environ.get("FORENSIC_HMAC_SECRET", "").encode("utf-8") or None
-#
-#     def _load_last_hash(self) -> str:
-#         if not self.path.exists():
-#             return "GENESIS"
-#         try:
-#             with self.path.open("rb") as f:
-#                 f.seek(0, os.SEEK_END)
-#                 size = f.tell()
-#                 # Read last ~4KB chunk to find last line
-#                 start = max(0, size - 4096)
-#                 f.seek(start)
-#                 tail = f.read().splitlines()
-#                 for line in reversed(tail):
-#                     line = line.strip()
-#                     if not line:
-#                         continue
-#                     try:
-#                         obj = json.loads(line)
-#                         return obj.get("curr_hash", "GENESIS")
-#                     except Exception:  # pragma: no cover - line json parse failure
-#                         continue
-#         except Exception:  # pragma: no cover - load last hash IO failure
-#             pass
-#         return "GENESIS"
-#
-#     def _load_last_hash_from(self, path: Union[str, Path]) -> str:
-#         p = Path(path)
-#         if not p.exists():
-#             return "GENESIS"
-#         try:
-#             with p.open("rb") as f:
-#                 f.seek(0, os.SEEK_END)
-#                 size = f.tell()
-#                 start = max(0, size - 4096)
-#                 f.seek(start)
-#                 tail = f.read().splitlines()
-#                 for line in reversed(tail):
-#                     line = line.strip()
-#                     if not line:
-#                         continue
-#                     try:
-#                         obj = json.loads(line)
-#                         return obj.get("curr_hash", "GENESIS")
-#                     except Exception:  # pragma: no cover - rotated file line parse failure
-#                         continue
-#         except Exception:  # pragma: no cover - load last hash from file IO failure
-#             pass
-#         return "GENESIS"
-#
-#     @staticmethod
-#     def _canonicalize(record: Mapping[str, Any]) -> str:
-#         return json.dumps(record, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-#
-#     def append(self, record: MutableMapping[str, Any]) -> str:
-#         with self._lock:
-#             record.setdefault("schema", 1)
-#             record.setdefault("ts", time.time())
-#             record.setdefault("trace_id", str(uuid.uuid4()))
-#             record["prev_hash"] = self._prev_hash
-#             canonical = self._canonicalize(record)
-#             curr_hash = hashlib.sha256((self._prev_hash + canonical).encode("utf-8")).hexdigest()
-#             record["curr_hash"] = curr_hash
-#             if self._hmac_key:
-#                 record["hmac"] = hmac.new(self._hmac_key, (self._prev_hash + canonical).encode("utf-8"), hashlib.sha256).hexdigest()
-#             line = json.dumps(record, ensure_ascii=False)
-#             # Rotate if oversized
-#             if self.path.exists() and self.path.stat().st_size + len(line) + 1 > self._max_bytes:
-#                 rotated = self.path.with_name(self.path.stem + f"-{int(time.time())}.log")
-#                 self.path.rename(rotated)
-#                 # Capture last hash from rotated file (previous chain)
-#                 prev_file_last_hash = self._load_last_hash_from(rotated)
-#                 # Start new chain
-#                 self._prev_hash = "GENESIS"
-#                 # Write a rotate marker directly (no recursion)
-#                 rotate_record = {
-#                     "schema": 1,
-#                     "event_type": "rotate",
-#                     "ts": time.time(),
-#                     "trace_id": str(uuid.uuid4()),
-#                     "prev_hash": self._prev_hash,
-#                     "prev_file": str(rotated.name),
-#                     "prev_file_last_hash": prev_file_last_hash,
-#                 }
-#                 canonical_rotate = self._canonicalize(rotate_record)
-#                 rotate_hash = hashlib.sha256((self._prev_hash + canonical_rotate).encode("utf-8")).hexdigest()
-#                 rotate_record["curr_hash"] = rotate_hash
-#                 if self._hmac_key:
-#                     rotate_record["hmac"] = hmac.new(self._hmac_key, (self._prev_hash + canonical_rotate).encode("utf-8"), hashlib.sha256).hexdigest()
-#                 with self.path.open("a", encoding="utf-8") as f:
-#                     f.write(json.dumps(rotate_record, ensure_ascii=False) + "\n")
-#                 try:
-#                     os.chmod(self.path, 0o600)
-#                 except Exception:  # pragma: no cover - chmod failure non-critical
-#                     pass
-#                 self._prev_hash = rotate_hash
-#                 # Recompute canonical & hash for the original record with new prev_hash
-#                 record.pop("curr_hash", None)
-#                 record.pop("hmac", None)
-#                 record["prev_hash"] = self._prev_hash
-#                 canonical = self._canonicalize(record)
-#                 curr_hash = hashlib.sha256((self._prev_hash + canonical).encode("utf-8")).hexdigest()
-#                 record["curr_hash"] = curr_hash
-#                 if self._hmac_key:
-#                     record["hmac"] = hmac.new(self._hmac_key, (self._prev_hash + canonical).encode("utf-8"), hashlib.sha256).hexdigest()
-#                 line = json.dumps(record, ensure_ascii=False)
-#             with self.path.open("a", encoding="utf-8") as f:
-#                 f.write(line + "\n")
-#             self._prev_hash = curr_hash
-#             return curr_hash
-#
-#     @staticmethod
-#     def verify_chain(path: Union[str, Path], *, hmac_secret: Optional[bytes] = None) -> Dict[str, Any]:
-#         prev = "GENESIS"
-#         ok = True
-#         count = 0
-#         bad_index: Optional[int] = None
-#         key = hmac_secret or os.environ.get("FORENSIC_HMAC_SECRET", "").encode("utf-8") or None
-#         with Path(path).open("r", encoding="utf-8") as f:
-#             for i, line in enumerate(f):
-#                 if not line.strip():
-#                     continue
-#                 obj = json.loads(line)
-#                 curr = obj.get("curr_hash")
-#                 # Recompute
-#                 tmp = dict(obj)
-#                 tmp.pop("curr_hash", None)
-#                 provided_hmac = tmp.pop("hmac", None)
-#                 canonical = json.dumps(tmp, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-#                 calc = hashlib.sha256((prev + canonical).encode("utf-8")).hexdigest()
-#                 if curr != calc:
-#                     ok = False
-#                     bad_index = i
-#                     break
-#                 if key is not None and provided_hmac:
-#                     calc_hmac = hmac.new(key, (prev + canonical).encode("utf-8"), hashlib.sha256).hexdigest()
-#                     if provided_hmac != calc_hmac:
-#                         ok = False
-#                         bad_index = i
-#                         break
-#                 prev = curr
-#                 count += 1
-#         return {"ok": ok, "lines": count, "first_bad_line": bad_index}
-#
-#     @staticmethod
-#     def verify_all(path: Union[str, Path]) -> Dict[str, Any]:
-#         """Verify integrity of the active log and any rotated predecessors.
-#
-#         Assumes rotated files follow the pattern '<stem>-<ts>.log' created by this logger.
-#         Validates:
-#         - Each file's internal hash chain
-#         - Rotation linkage: next file's rotate record references previous file name and last hash
-#         """
-#         base = Path(path)
-#         directory = base.parent
-#         stem = base.stem
-#         # Collect rotated files matching stem-*.log
-#         rotated = sorted(directory.glob(f"{stem}-*.log"), key=lambda p: p.name)
-#         files = rotated + [base]
-#         results: List[Dict[str, Any]] = []
-#         ok = True
-#
-#         def _last_hash(p: Path) -> str:
-#             try:
-#                 with p.open("rb") as f:
-#                     f.seek(0, os.SEEK_END)
-#                     size = f.tell()
-#                     start = max(0, size - 4096)
-#                     f.seek(start)
-#                     tail = f.read().splitlines()
-#                     for line in reversed(tail):
-#                         if not line.strip():
-#                             continue
-#                         obj = json.loads(line)
-#                         ch = obj.get("curr_hash")
-#                         if ch:
-#                             return ch
-#             except Exception:
-#                 pass
-#             return "GENESIS"
-#
-#         def _first_rotate_record(p: Path) -> Optional[Dict[str, Any]]:
-#             try:
-#                 with p.open("r", encoding="utf-8") as f:
-#                     for line in f:
-#                         if not line.strip():
-#                             continue
-#                         obj = json.loads(line)
-#                         if obj.get("event_type") == "rotate":
-#                             return obj
-#                         # Stop early after first non-rotate event
-#                         break
-#             except Exception:
-#                 return None
-#             return None
-#
-#         # Verify each file chain
-#         for p in files:
-#             res = ForensicLogger.verify_chain(p)
-#             results.append({"file": str(p.name), **res})
-#             if not res.get("ok", False):
-#                 ok = False
-#
-#         # Verify rotation linkage between consecutive files
-#         for i in range(1, len(files)):
-#             prev = files[i - 1]
-#             curr = files[i]
-#             rotate = _first_rotate_record(curr)
-#             if rotate is None:
-#                 # No rotation marker in current file; acceptable only for the first file in series
-#                 # If there are rotated predecessors, we must have a rotate record
-#                 if i > 0:
-#                     ok = False
-#                     results.append({"file": str(curr.name), "ok": False, "error": "missing rotate record"})
-#                 continue
-#             expected_name = prev.name
-#             expected_hash = _last_hash(prev)
-#             r_prev_file = rotate.get("prev_file")
-#             r_prev_hash = rotate.get("prev_file_last_hash")
-#             # Some environments may produce immediate rotations with self-reference; tolerate if self-referential
-#             if (r_prev_file == curr.name and r_prev_hash == expected_hash):  # self reference benign
-#                 pass
-#             elif r_prev_file != expected_name or r_prev_hash != expected_hash:
-#                 ok = False
-#                 results.append({
-#                     "file": str(curr.name),
-#                     "ok": False,
-#                     "error": "rotation linkage mismatch",
-#                     "expected_prev_file": expected_name,
-#                     "expected_prev_last_hash": expected_hash,
-#                     "rotate_prev_file": r_prev_file,
-#                     "rotate_prev_last_hash": r_prev_hash,
-#                 })
-#
-#         return {"ok": ok, "files": results}
+# Backward compatibility temporary aliases (scheduled removal in future major)
+HygieneViolation = HygieneViolationError
+UnknownHandle = UnknownHandleError
+FreeWithoutSanitize = FreeWithoutSanitizeError
 
 
 # ---------- KV Buffer model ----------
@@ -344,17 +92,17 @@ class CacheTracer:
 
     def __init__(
         self,
-        log_path: Union[str, Path] = "forensics/kv_cache.log",
+        log_path: str | Path = "forensics/kv_cache.log",
         *,
         coverage_threshold: float = 99.9,
         max_log_bytes: int = 5_000_000,
         double_pass_default: bool = False,
         verify_samples_default: int = 8,
         default_max_reuse: int = 0,
-        default_ttl_sec: Optional[float] = None,
+        default_ttl_sec: float | None = None,
     ) -> None:
         self.logger = ForensicLogger(log_path, max_bytes=max_log_bytes)
-        self._buffers: Dict[str, KVBuffer] = {}
+        self._buffers: dict[str, KVBuffer] = {}
         self._lock = threading.RLock()
         logging.getLogger(__name__).setLevel(logging.INFO)
 
@@ -371,7 +119,7 @@ class CacheTracer:
             except Exception:
                 return default
 
-        def _env_float_opt(key: str, default: Optional[float]) -> Optional[float]:
+        def _env_float_opt(key: str, default: float | None) -> float | None:
             v = os.environ.get(key)
             if v is None or v == "":
                 return default
@@ -380,19 +128,13 @@ class CacheTracer:
             except Exception:
                 return default
 
-        self.COVERAGE_THRESHOLD = float(
-            os.environ.get("KV_COVERAGE_THRESHOLD", coverage_threshold)
-        )
-        self._double_pass_default = _env_bool(
-            "KV_DOUBLE_PASS_DEFAULT", double_pass_default
-        )
-        self._verify_samples_default = _env_int(
-            "KV_VERIFY_SAMPLES_DEFAULT", verify_samples_default
-        )
+        self.COVERAGE_THRESHOLD = float(os.environ.get("KV_COVERAGE_THRESHOLD", coverage_threshold))
+        self._double_pass_default = _env_bool("KV_DOUBLE_PASS_DEFAULT", double_pass_default)
+        self._verify_samples_default = _env_int("KV_VERIFY_SAMPLES_DEFAULT", verify_samples_default)
         self._default_max_reuse = _env_int("KV_DEFAULT_MAX_REUSE", default_max_reuse)
         self._default_ttl_sec = _env_float_opt("KV_DEFAULT_TTL_SEC", default_ttl_sec)
         # Metrics
-        self._sanitize_durations_ms: List[float] = []
+        self._sanitize_durations_ms: list[float] = []
         self._allocations: int = 0
         self._reuse_events: int = 0
         self._freed_total: int = 0
@@ -404,14 +146,14 @@ class CacheTracer:
         tenant_id: str,
         request_id: str,
         model_id: str,
-        shape: Tuple[int, ...],
-        dtype: Union[str, Any] = "float32",
+        shape: tuple[int, ...],
+        dtype: str | Any = "float32",
         device: str = "cpu",
-        framework: Optional[str] = None,
-        stream_id: Optional[str] = None,
+        framework: str | None = None,
+        stream_id: str | None = None,
         pinned: bool = False,
-        ttl_sec: Optional[float] = None,
-        max_reuse: Optional[int] = None,
+        ttl_sec: float | None = None,
+        max_reuse: int | None = None,
     ) -> str:
         """Allocate a buffer/tensor and register it with metadata.
 
@@ -463,12 +205,10 @@ class CacheTracer:
     def _get(self, handle: str) -> KVBuffer:
         with self._lock:
             if handle not in self._buffers:
-                raise UnknownHandle(f"Unknown handle: {handle}")
+                raise UnknownHandleError(f"Unknown handle: {handle}")
             return self._buffers[handle]
 
-    def bind(
-        self, handle: str, *, stream_id: Optional[str] = None, stream: Any = None
-    ) -> None:
+    def bind(self, handle: str, *, stream_id: str | None = None, stream: Any = None) -> None:
         with self._lock:
             buf = self._get(handle)
             buf.stream_id = stream_id
@@ -530,9 +270,7 @@ class CacheTracer:
             buf.reuse_count += 1
             self._reuse_events += 1
             exceeded = (
-                buf.max_reuse is not None
-                and buf.max_reuse >= 0
-                and buf.reuse_count > buf.max_reuse
+                buf.max_reuse is not None and buf.max_reuse >= 0 and buf.reuse_count > buf.max_reuse
             )
             tenant_id, request_id, model_id = (
                 buf.tenant_id,
@@ -562,8 +300,8 @@ class CacheTracer:
         *,
         async_: bool = False,
         verify: bool = True,
-        double_pass: Optional[bool] = None,
-        samples: Optional[int] = None,
+        double_pass: bool | None = None,
+        samples: int | None = None,
     ) -> float:
         with self._lock:
             buf = self._get(handle)
@@ -594,39 +332,25 @@ class CacheTracer:
         # Complete synchronously
         return self.wait(handle, verify=verify, samples=samples)
 
-    def wait(
-        self, handle: str, *, verify: bool = True, samples: Optional[int] = None
-    ) -> float:
+    def wait(self, handle: str, *, verify: bool = True, samples: int | None = None) -> float:
         buf = self._get(handle)
         # Sync outside lock (may block)
         if buf.event_obj is not None:
             try:
                 buf.event_obj.synchronize()
-            except Exception:
-                pass
+            except Exception:  # noqa: BLE001
+                logging.debug("Event synchronize failed", exc_info=True)
         elif (
-            torch is not None
-            and isinstance(buf._tensor, torch.Tensor)
-            and buf._tensor.is_cuda
+            torch is not None and isinstance(buf._tensor, torch.Tensor) and buf._tensor.is_cuda
         ):  # pragma: no cover - GPU sync requires CUDA hardware
-            torch.cuda.synchronize(
-                device=buf._tensor.device
-            )  # pragma: no cover - requires CUDA
+            torch.cuda.synchronize(device=buf._tensor.device)  # pragma: no cover - requires CUDA
         with self._lock:
             buf.sanitize_end_ts = time.time()
             buf.sanitize_duration_ms = float(
-                int(
-                    1000
-                    * (
-                        buf.sanitize_end_ts
-                        - (buf.sanitize_start_ts or buf.sanitize_end_ts)
-                    )
-                )
+                int(1000 * (buf.sanitize_end_ts - (buf.sanitize_start_ts or buf.sanitize_end_ts)))
             )
             self._sanitize_durations_ms.append(buf.sanitize_duration_ms)
-            buf.coverage_pct = self._attest_internal(
-                buf, verify=verify, samples=samples
-            )
+            buf.coverage_pct = self._attest_internal(buf, verify=verify, samples=samples)
             buf.status = "sanitized"
             cov = buf.coverage_pct
             dur = buf.sanitize_duration_ms
@@ -672,14 +396,9 @@ class CacheTracer:
             if buf.status == "freed":
                 return
             # If coverage below threshold, we'll quarantine and raise after releasing lock
-            needs_quarantine = buf.coverage_pct < self.COVERAGE_THRESHOLD
         if buf.coverage_pct < self.COVERAGE_THRESHOLD:
-            self.quarantine(
-                handle, reason=f"coverage {buf.coverage_pct:.4f} below threshold"
-            )
-            raise FreeWithoutSanitize(
-                "Attempt to free buffer without sufficient sanitization"
-            )
+            self.quarantine(handle, reason=f"coverage {buf.coverage_pct:.4f} below threshold")
+            raise FreeWithoutSanitizeError("Attempt to free buffer without sufficient sanitization")
         with self._lock:
             buf.status = "freed"
             buf._tensor = None
@@ -695,7 +414,7 @@ class CacheTracer:
         )
 
     # ----- Metrics and export -----
-    def get_metrics(self) -> Dict[str, Any]:
+    def get_metrics(self) -> dict[str, Any]:
         with self._lock:
             total = len(self._buffers)
             unsanitized = sum(
@@ -703,17 +422,11 @@ class CacheTracer:
                 for b in self._buffers.values()
                 if b.status not in ("sanitized", "freed", "quarantined")
             )
-            quarantined = sum(
-                1 for b in self._buffers.values() if b.status == "quarantined"
-            )
+            quarantined = sum(1 for b in self._buffers.values() if b.status == "quarantined")
             active = sum(
-                1
-                for b in self._buffers.values()
-                if b.status not in ("freed", "quarantined")
+                1 for b in self._buffers.values() if b.status not in ("freed", "quarantined")
             )
-            coverages = [
-                b.coverage_pct for b in self._buffers.values() if b.coverage_pct > 0
-            ]
+            coverages = [b.coverage_pct for b in self._buffers.values() if b.coverage_pct > 0]
             durations = [
                 b.sanitize_duration_ms
                 for b in self._buffers.values()
@@ -743,41 +456,37 @@ class CacheTracer:
             "reuse_rate": reuse_rate,
         }
 
-    def export_metrics(self, path: Union[str, Path]) -> None:
+    def export_metrics(self, path: str | Path) -> None:
         metrics = self.get_metrics()
         out_path = Path(path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with out_path.open("w", encoding="utf-8") as f:
             json.dump(metrics, f, indent=2)
 
-    def export_metrics_prometheus(self, path: Union[str, Path]) -> None:
+    def export_metrics_prometheus(self, path: str | Path) -> None:
         m = self.get_metrics()
         out_path = Path(path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        lines: List[str] = []
+        lines: list[str] = []
         # HELP/TYPE headers
-        lines.append(
-            "# HELP kv_hygiene_unsanitized_regions Count of buffers not yet sanitized"
-        )
+        lines.append("# HELP kv_hygiene_unsanitized_regions Count of buffers not yet sanitized")
         lines.append("# TYPE kv_hygiene_unsanitized_regions gauge")
-        lines.append(
-            f"kv_hygiene_unsanitized_regions {int(m['unsanitized_regions_count'])}"
-        )
+        lines.append(f"kv_hygiene_unsanitized_regions {int(m['unsanitized_regions_count'])}")
 
         lines.append(
-            "# HELP kv_hygiene_quarantine_count Count of buffers quarantined due to policy violations"
+            "# HELP kv_hygiene_quarantine_count Count of buffers quarantined due to policy violations"  # noqa: E501
         )
         lines.append("# TYPE kv_hygiene_quarantine_count gauge")
         lines.append(f"kv_hygiene_quarantine_count {int(m['quarantine_count'])}")
 
         lines.append(
-            "# HELP kv_hygiene_min_coverage_pct Minimum observed sanitization coverage percent across buffers"
+            "# HELP kv_hygiene_min_coverage_pct Minimum observed sanitization coverage percent across buffers"  # noqa: E501
         )
         lines.append("# TYPE kv_hygiene_min_coverage_pct gauge")
         lines.append(f"kv_hygiene_min_coverage_pct {float(m['min_coverage_pct'])}")
 
         lines.append(
-            "# HELP kv_hygiene_avg_coverage_pct Average sanitization coverage percent across buffers"
+            "# HELP kv_hygiene_avg_coverage_pct Average sanitization coverage percent across buffers"  # noqa: E501
         )
         lines.append("# TYPE kv_hygiene_avg_coverage_pct gauge")
         lines.append(f"kv_hygiene_avg_coverage_pct {float(m['avg_coverage_pct'])}")
@@ -792,17 +501,13 @@ class CacheTracer:
             "# HELP kv_hygiene_sanitize_duration_p50_ms P50 sanitize duration in milliseconds"
         )
         lines.append("# TYPE kv_hygiene_sanitize_duration_p50_ms gauge")
-        lines.append(
-            f"kv_hygiene_sanitize_duration_p50_ms {float(m['sanitize_duration_p50_ms'])}"
-        )
+        lines.append(f"kv_hygiene_sanitize_duration_p50_ms {float(m['sanitize_duration_p50_ms'])}")
 
         lines.append(
             "# HELP kv_hygiene_sanitize_duration_p95_ms P95 sanitize duration in milliseconds"
         )
         lines.append("# TYPE kv_hygiene_sanitize_duration_p95_ms gauge")
-        lines.append(
-            f"kv_hygiene_sanitize_duration_p95_ms {float(m['sanitize_duration_p95_ms'])}"
-        )
+        lines.append(f"kv_hygiene_sanitize_duration_p95_ms {float(m['sanitize_duration_p95_ms'])}")
 
         lines.append(
             "# HELP kv_hygiene_active_buffers Number of active (not freed/quarantined) buffers"
@@ -836,18 +541,17 @@ class CacheTracer:
     # ----- Internals -----
     def _create_buffer(
         self,
-        shape: Tuple[int, ...],
-        dtype: Union[str, Any],
+        shape: tuple[int, ...],
+        dtype: str | Any,
         device: str,
-        framework: Optional[str],
+        framework: str | None,
         *,
         pinned: bool = False,
-    ) -> Tuple[Any, Optional[int], int, str]:
+    ) -> tuple[Any, int | None, int, str]:
         """Create a tensor/array per request, returning (obj, ptr, nbytes, dtype_str)."""
         # Torch path
         if torch is not None and (
-            framework == "torch"
-            or (isinstance(dtype, torch.dtype) or device.startswith("cuda"))
+            framework == "torch" or (isinstance(dtype, torch.dtype) or device.startswith("cuda"))
         ):
             # Map dtype
             if isinstance(dtype, torch.dtype):
@@ -917,7 +621,7 @@ class CacheTracer:
         return False
 
     def _attest_internal(
-        self, buf: KVBuffer, *, verify: bool = True, samples: Optional[int] = None
+        self, buf: KVBuffer, *, verify: bool = True, samples: int | None = None
     ) -> float:
         # Compute coverage based on scrubbed_bytes, then optionally verify sample values
         if buf.nbytes == 0:
@@ -934,52 +638,77 @@ class CacheTracer:
 
     def _verify_zero(
         self, buf: KVBuffer, *, samples: int = 8
-    ) -> bool:  # legacy shim, now owns sampling so tests can monkeypatch
+    ) -> bool:  # legacy shim, owns sampling so tests can monkeypatch
         t = buf._tensor
         if t is None:
             buf.verify_samples = []
             return True
-        # Determine element count
-        if hasattr(t, "numel"):
-            n = int(t.numel())
-        elif hasattr(t, "size"):
-            n = int(getattr(t, "size", 0))
-        else:
-            n = 0
+        n = self._buffer_numel(t)
         if n <= 0:
             buf.verify_samples = []
             return True
-        # Record deterministic sample indices (even if we short‑circuit success) so tests observing samples still function
+        # Record deterministic sample indices (even if we short‑circuit success)
+        buf.verify_samples = self._sample_indices_deterministic(n, samples)
+        # NumPy fast-path: if ndarray was zeroized via sanitize we trust it
+        if self._is_numpy_array(t):
+            return True
+        # Torch / generic path: inspect sampled values
+        return self._samples_zero(t, buf.verify_samples)
+
+    @staticmethod
+    def _buffer_numel(t: Any) -> int:
+        if hasattr(t, "numel"):
+            try:
+                numel_fn = getattr(t, "numel")
+                return int(numel_fn())
+            except Exception:  # pragma: no cover
+                return 0
+        if hasattr(t, "size"):
+            try:
+                return int(getattr(t, "size", 0))
+            except Exception:  # pragma: no cover
+                return 0
+        return 0
+
+    @staticmethod
+    def _sample_indices_deterministic(n: int, k: int) -> list[int]:
         try:
-            sampler = getattr(sanitizer_mod, "_sample_indices")
-            buf.verify_samples = sampler(n, samples)
-        except Exception:  # pragma: no cover - deterministic fallback
+            sampler = sanitizer_mod._sample_indices
+            return list(sampler(n, k))
+        except Exception:  # pragma: no cover - deterministic fallback  # noqa: BLE001
             import random as _r
 
-            rnd = _r.Random(n * 31 + samples * 17)
-            buf.verify_samples = sorted(rnd.sample(range(n), min(samples, n)))
-        # For NumPy ndarray path trust zeroization
-        try:
-            if "np" in globals():  # type: ignore
-                import numpy as _np  # type: ignore
+            rnd = _r.Random(n * 31 + k * 17)  # noqa: S311 - deterministic non-crypto
+            return sorted(rnd.sample(range(n), min(k, n)))
 
-                if isinstance(t, _np.ndarray):
-                    return True
-        except Exception:  # pragma: no cover - fallback
-            pass
-        # Torch path: actually sample to detect residuals
+    @staticmethod
+    def _is_numpy_array(t: Any) -> bool:
+        try:
+            import numpy as _np
+            return isinstance(t, _np.ndarray)
+        except Exception:  # pragma: no cover - fallback  # noqa: BLE001
+            logging.debug("NumPy verification fast-path failed", exc_info=True)
+            return False
+
+    @staticmethod
+    def _samples_zero(t: Any, sample_indices: list[int]) -> bool:
         try:
             if hasattr(t, "view"):
                 flat = t.view(-1)
-                return all(flat[i].item() == 0 for i in buf.verify_samples)
-        except (
-            Exception
-        ):  # pragma: no cover - conservative failure -> mark not verified
+                for i in sample_indices:
+                    # torch.Tensor.item() returns Python scalar
+                    if flat[i].item() != 0:
+                        return False
+                return True
+        except Exception:  # pragma: no cover - conservative failure
+            # Mark not verified if any unexpected error during sampling
+            # noqa: BLE001
             return False
+        # If we cannot introspect, assume success (opaque type already zeroized)
         return True
 
     @staticmethod
-    def _percentile(values: Iterable[Optional[float]], q: float) -> float:
+    def _percentile(values: Iterable[float | None], q: float) -> float:
         arr = [float(v) for v in values if v is not None]
         if not arr:
             return 0.0

@@ -3,8 +3,8 @@ import os
 import time
 from pathlib import Path
 
-from tools.forensic_logger import ForensicLogger
 from tools import verify_logs
+from tools.forensic_logger import ForensicLogger
 
 
 def _make_chain(base: Path, rotations: int = 2, entries_per=3, max_bytes=400):

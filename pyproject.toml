@@ -11,9 +11,25 @@ target-version = ["py310", "py311", "py312", "py313"]
 
 [tool.ruff]
 line-length = 100
-select = ["E","F","I","UP","B","C90","N","S"]
-ignore = ["S101"]
 exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E","F","I","UP","B","C90","N","S"]
+ignore = [
+	"S101",  # allow assert in tests
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+	"S311",  # deterministic randomness acceptable in tests
+	"S603",  # controlled subprocess execution in tests
+	"S105",  # test-only hardcoded secrets
+	"B017",  # broad exception assertion in legacy tests (could tighten later)
+	"E501",  # allow longer explanatory comments in tests
+	"S110",  # legacy try/except/pass patterns in tests acceptable
+]
+"tools/forensic_logger.py" = ["C901"]  # complexity acceptable for now; future refactor
+"tools/metrics_exporter.py" = ["S104"]  # binding 0.0.0.0 intentional for exporter
 
 [tool.ruff.format]
 quote-style = "double"
@@ -27,9 +43,18 @@ parallel = false
 show_missing = true
 skip_covered = false
 
+[tool.mypy]
+python_version = "3.11"
+files = ["tools"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unused_configs = true
+disallow_untyped_defs = false  # library gradually typing
+
 [tool.pytest.ini_options]
 addopts = "-q"
 filterwarnings = ["ignore::DeprecationWarning"]
 
 [tool.llmops]
-coverage_gate = 87
+coverage_gate = 90

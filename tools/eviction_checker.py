@@ -8,12 +8,12 @@ if thresholds are not met.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, Optional
 import json
-from pathlib import Path
 import sys
 import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 
 @dataclass
@@ -21,13 +21,11 @@ class Thresholds:
     coverage_pct_min: float = 99.9
     unsanitized_regions_max: int = 0
     quarantine_count_max: int = 0
-    reuse_rate_max: Optional[float] = None  # optional policy bound
-    sanitize_p95_ms_max: Optional[float] = None
+    reuse_rate_max: float | None = None  # optional policy bound
+    sanitize_p95_ms_max: float | None = None
 
 
-def check_metrics(
-    metrics: Dict[str, Any], thresholds: Optional[Thresholds] = None
-) -> Dict[str, Any]:
+def check_metrics(metrics: dict[str, Any], thresholds: Thresholds | None = None) -> dict[str, Any]:
     th = thresholds or Thresholds()
     coverage = float(metrics.get("min_coverage_pct", 0.0))
     unsanitized = int(metrics.get("unsanitized_regions_count", 0))
@@ -88,7 +86,7 @@ def check_metrics(
     return verdict
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(description="Eviction / Hygiene Threshold Checker")

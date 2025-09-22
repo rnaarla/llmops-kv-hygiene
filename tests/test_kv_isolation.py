@@ -1,15 +1,16 @@
 import os
 import subprocess
 import sys
+
 import pytest
 
+from tools.activation_logger import ActivationLogger
 from tools.cache_tracer import (
     CacheTracer,
     ForensicLogger,
-    UnknownHandle,
     FreeWithoutSanitize,
+    UnknownHandle,
 )
-from tools.activation_logger import ActivationLogger
 
 
 def test_unique_handles_and_unknown_handle(tmp_path):
