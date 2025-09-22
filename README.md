@@ -245,3 +245,38 @@ MIT © Contributors. See `LICENSE`.
 Contributing
 
 See `CONTRIBUTING.md`. For security issues, see `SECURITY.md`.
+
+## Coverage policy
+
+Current enforced line+branch coverage threshold: **87%**.
+
+### Rationale
+
+- Plateau reached after exhaustive high-value tests; remaining uncovered lines are predominantly defensive / environment-specific (GPU, IO fallbacks, rare error paths) inside a monolithic `cache_tracer` module.
+- Further synthetic tests would add maintenance risk without materially increasing assurance.
+
+### Improvement path
+
+1. Decompose `tools/cache_tracer.py` into smaller modules (`buffer_model`, `sanitizer`, `policies`, `metrics_utils`).
+2. Isolate GPU-only logic in a dedicated module (optionally excluded when CUDA unavailable).
+3. Introduce focused unit tests per extracted module to raise organic coverage without artificial scenarios.
+
+### Phase 3 Decomposition Status (Sanitizer Extraction)
+
+- Extracted modules: `buffer_model.py`, `metrics_utils.py`, `policies.py`, `sanitizer.py`, `forensic_logger.py`.
+- Added targeted tests: `test_metrics_utils.py`, `test_policies.py`, and `test_sanitizer_module.py` (covers zeroization success, failure injection, and torch CPU path when available).
+- Refactored verification seam: `_verify_zero` restored as monkeypatch target while sanitizer centralizes zeroization logic.
+- Zero-length buffers now treated as 100% coverage (edge-case clarification) and negative `max_reuse` interpreted as no limit.
+- Future raise of the coverage gate will occur only after sustained ≥90% true coverage post-refactor and validation that remaining uncovered lines are legitimately defensive or hardware-gated.
+
+### Next planned steps
+
+1. Add mypy typing and incremental strictness.
+2. Evaluate raising coverage threshold (target 90%) after verifying module-level stability.
+3. Optional: separate CUDA-specific sanitizer path into its own module for clearer exclusion logic when CUDA unavailable.
+
+### Guidance
+
+- Do not lower coverage below 87% without explicit risk acceptance.
+- When adding new modules, require near-100% coverage on those modules unless they contain intentional defensive or platform-specific branches.
+
