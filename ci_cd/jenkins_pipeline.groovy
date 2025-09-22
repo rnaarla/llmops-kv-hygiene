@@ -54,7 +54,7 @@ pipeline {
             --cov=tools --cov-report=term-missing \
             --cov-report=xml:reports/coverage.xml \
             --junitxml=reports/junit.xml \
-            --cov-fail-under=87
+            --cov-fail-under=90
         '''
       }
     }

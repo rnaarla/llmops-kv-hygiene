@@ -1,0 +1,35 @@
+[project]
+name = "llmops-kv-hygiene"
+version = "0.1.0"
+description = "KV cache hygiene tracing, sanitization, and forensic logging utilities"
+authors = [{ name = "rnaarla" }]
+requires-python = ">=3.10"
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312", "py313"]
+
+[tool.ruff]
+line-length = 100
+select = ["E","F","I","UP","B","C90","N","S"]
+ignore = ["S101"]
+exclude = [".venv"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.coverage.run]
+branch = true
+source = ["tools"]
+parallel = false
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+
+[tool.pytest.ini_options]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.llmops]
+coverage_gate = 87

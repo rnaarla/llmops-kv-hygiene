@@ -671,9 +671,8 @@ class CacheTracer:
             buf = self._get(handle)
             if buf.status == "freed":
                 return
-            if buf.coverage_pct < self.COVERAGE_THRESHOLD:
-                # Drop lock before quarantine append to avoid nested lock issues
-                pass
+            # If coverage below threshold, we'll quarantine and raise after releasing lock
+            needs_quarantine = buf.coverage_pct < self.COVERAGE_THRESHOLD
         if buf.coverage_pct < self.COVERAGE_THRESHOLD:
             self.quarantine(
                 handle, reason=f"coverage {buf.coverage_pct:.4f} below threshold"

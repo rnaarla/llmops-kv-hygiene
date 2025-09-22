@@ -14,13 +14,22 @@ repos:
     hooks:
       - id: black
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.5.6
+    rev: v0.6.9
     hooks:
       - id: ruff
         args: ["--fix"]
+      - id: ruff-format
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.10.0
     hooks:
       - id: mypy
         additional_dependencies: []
         args: ["--ignore-missing-imports", "--python-version=3.11", "tools"]
+  - repo: local
+    hooks:
+      - id: pytest-quick
+        name: pytest quick subset
+        entry: bash -c 'pytest -q --maxfail=1'
+        language: system
+        pass_filenames: false
+        stages: [commit]

@@ -48,11 +48,11 @@ if ! python -c "import torch" 2>/dev/null; then
   fi
 fi
 
-info "Running tests with coverage (target 87%)"
+info "Running tests with coverage (target 90%)"
 set +e
 # Chosen 87%: empirical plateau after excluding low-value defensive/GPU branches.
 # Future refactor can raise this again once tracer is decomposed.
-pytest -q --cov=tools --cov-report=term-missing --cov-fail-under=87
+pytest -q --cov=tools --cov-report=term-missing --cov-fail-under=90
 RC=$?
 set -e
 
