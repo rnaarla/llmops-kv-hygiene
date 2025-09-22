@@ -38,8 +38,12 @@ pipeline {
       steps {
         sh '''
           . .venv/bin/activate
-          ruff check . || true
-          black --check . || true
+          echo "Running ruff (fail on issues)";
+          ruff check .
+          echo "Running black --check";
+          black --check .
+          echo "Running mypy (tools package)";
+          mypy .
         '''
       }
     }
