@@ -6,6 +6,7 @@ Serves the contents of a metrics file (default: forensics/metrics.prom) at /metr
 Usage:
   METRICS_FILE=forensics/metrics.prom METRICS_PORT=8000 python tools/metrics_exporter.py
 """
+
 import os
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -25,7 +26,7 @@ class Handler(BaseHTTPRequestHandler):
             msg = format
         sys.stderr.write(f"{self.address_string()} - - [{self.log_date_time_string()}] {msg}\n")
 
-    def do_GET(self):
+    def do_GET(self):  # noqa: N802 - required method name by BaseHTTPRequestHandler
         if self.path != "/metrics":
             self.send_response(404)
             self.end_headers()

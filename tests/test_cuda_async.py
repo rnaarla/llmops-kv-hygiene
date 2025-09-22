@@ -1,11 +1,9 @@
 import pytest
 
-try:
-    import torch
-except Exception:  # pragma: no cover
-    torch = None  # type: ignore[assignment]
-
+from test_support.optional_deps import opt
 from tools.cache_tracer import CacheTracer
+
+torch = opt.torch()
 
 
 def cuda_available() -> bool:

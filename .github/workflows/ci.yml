@@ -31,12 +31,21 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+      - name: Type ignore policy audit
+        run: python tools/audit_type_ignores.py
       - name: Ruff
         run: ruff check . --output-format=github
       - name: Black check
         run: black --check .
-      - name: Mypy (tools only)
-        run: mypy .
+      - name: Mypy (tools+tests via config)
+        run: mypy --config-file mypy.ini tools tests
+      - name: Tool versions summary
+        if: always()
+        run: |
+          echo "Python $(python -V)" || true
+          ruff --version || true
+          black --version || true
+          mypy --version || true
 
   test:
     name: Unit tests and hygiene gates

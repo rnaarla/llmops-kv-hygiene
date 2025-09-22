@@ -18,18 +18,25 @@ repos:
     hooks:
       - id: ruff
         args: ["--fix"]
-      - id: ruff-format
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.10.0
-    hooks:
-      - id: mypy
-        additional_dependencies: []
-        args: ["--ignore-missing-imports", "--python-version=3.11", "tools"]
   - repo: local
     hooks:
+      - id: mypy
+        name: mypy
+        language: system
+        entry: bash -c 'mypy --config-file mypy.ini $(git ls-files "tools/*.py") $(git ls-files "tests/*.py")'
+        pass_filenames: false
+        stages: [pre-commit]
+  - repo: local
+    hooks:
+      - id: audit-type-ignores
+        name: audit type ignores
+        entry: python tools/audit_type_ignores.py
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
       - id: pytest-quick
         name: pytest quick subset
         entry: bash -c 'pytest -q --maxfail=1'
         language: system
         pass_filenames: false
-        stages: [commit]
+        stages: [pre-commit]

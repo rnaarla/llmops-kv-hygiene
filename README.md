@@ -306,4 +306,3 @@ Current enforced line+branch coverage threshold: **90%**.
 - Do not lower coverage below 90% without explicit risk acceptance sign‑off.
 - New modules should target ≥95% coverage (≥99% if pure logic, excluding hardware / randomness branches).
 - Keep attestation (runtime coverage per buffer) threshold distinct and higher than code coverage to maintain defense in depth.
-

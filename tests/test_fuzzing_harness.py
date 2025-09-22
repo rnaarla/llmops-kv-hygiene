@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pytest
 
+from test_support.optional_deps import opt
 from tools.cache_tracer import CacheTracer
 
 
@@ -10,14 +11,8 @@ def _write_sentinel(tracer: CacheTracer, handle: str, value: float = 1.0) -> Non
     # Directly access underlying tensor/array for test harness only
     buf = tracer._get(handle)
     t = buf._tensor
-    try:
-        import torch
-    except Exception:  # pragma: no cover
-        torch = None  # type: ignore[assignment]
-    try:
-        import numpy as np
-    except Exception:  # pragma: no cover
-        np = None  # type: ignore[assignment]
+    torch = opt.torch()
+    np = opt.numpy()
 
     if torch is not None and isinstance(t, torch.Tensor):
         t.fill_(value)
@@ -28,14 +23,8 @@ def _write_sentinel(tracer: CacheTracer, handle: str, value: float = 1.0) -> Non
 def _assert_zero(tracer: CacheTracer, handle: str) -> None:
     buf = tracer._get(handle)
     t = buf._tensor
-    try:
-        import torch
-    except Exception:  # pragma: no cover
-        torch = None  # type: ignore[assignment]
-    try:
-        import numpy as np
-    except Exception:  # pragma: no cover
-        np = None  # type: ignore[assignment]
+    torch = opt.torch()
+    np = opt.numpy()
 
     if torch is not None and isinstance(t, torch.Tensor):
         if t.numel() > 0:

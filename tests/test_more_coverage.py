@@ -3,13 +3,11 @@ from pathlib import Path
 
 import pytest
 
+from test_support.optional_deps import opt
 from tools.cache_tracer import CacheTracer
 from tools.forensic_logger import ForensicLogger
 
-try:
-    import numpy as np
-except Exception:  # pragma: no cover
-    np = None  # type: ignore[assignment]
+np = opt.numpy()
 
 
 def test_double_pass_branch(tmp_path, monkeypatch):

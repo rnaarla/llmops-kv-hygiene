@@ -2,14 +2,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from test_support.optional_deps import opt
 from tools import sanitizer as sanitizer_mod
 from tools.cache_tracer import CacheTracer
 from tools.forensic_logger import ForensicLogger
 
-try:  # optional deps
-    import numpy as np
-except Exception:  # pragma: no cover
-    np = None  # type: ignore[assignment]
+np = opt.numpy()
 
 
 def _make_buf(size: int = 8):
