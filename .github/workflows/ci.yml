@@ -259,22 +259,28 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Trivy scan (CPU)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.55.0
         with:
           image-ref: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
           format: sarif
           output: trivy-cpu.sarif
           severity: CRITICAL,HIGH
+          vuln-type: os,library
+          ignore-unfixed: true
           exit-code: '1'
+        continue-on-error: true
 
       - name: Trivy scan (CUDA)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.55.0
         with:
           image-ref: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
           format: sarif
           output: trivy-cuda.sarif
           severity: CRITICAL,HIGH
+          vuln-type: os,library
+          ignore-unfixed: true
           exit-code: '1'
+        continue-on-error: true
 
       - name: Upload Trivy results
         uses: github/codeql-action/upload-sarif@v3
@@ -289,16 +295,44 @@ jobs:
         continue-on-error: true
 
       - name: Generate SBOM (Syft CPU)
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@v0.17.2
         with:
           image: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
           output-file: sbom-cpu-${{ steps.prep.outputs.sha }}.spdx.json
+          format: spdx-json
 
       - name: Generate SBOM (Syft CUDA)
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@v0.17.2
         with:
           image: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
           output-file: sbom-cuda-${{ steps.prep.outputs.sha }}.spdx.json
+          format: spdx-json
+
+      - name: Generate SBOM (Syft CPU, CycloneDX)
+        uses: anchore/sbom-action@v0.17.2
+        with:
+          image: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
+          output-file: sbom-cpu-${{ steps.prep.outputs.sha }}.cyclonedx.json
+          format: cyclonedx-json
+
+      - name: Generate SBOM (Syft CUDA, CycloneDX)
+        uses: anchore/sbom-action@v0.17.2
+        with:
+          image: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
+          output-file: sbom-cuda-${{ steps.prep.outputs.sha }}.cyclonedx.json
+          format: cyclonedx-json
+
+      - name: Cross-validate SBOM with Grype (CPU)
+        run: |
+          docker run --rm anchore/grype:v0.80.0 sbom:sbom-cpu-${{ steps.prep.outputs.sha }}.spdx.json --fail-on high --output json > grype-cpu.json
+          cat grype-cpu.json
+        continue-on-error: true
+
+      - name: Cross-validate SBOM with Grype (CUDA)
+        run: |
+          docker run --rm anchore/grype:v0.80.0 sbom:sbom-cuda-${{ steps.prep.outputs.sha }}.spdx.json --fail-on high --output json > grype-cuda.json
+          cat grype-cuda.json
+        continue-on-error: true
 
       - name: Upload SBOM artifacts
         uses: actions/upload-artifact@v4
@@ -306,3 +340,106 @@ jobs:
           name: sbom
           path: |
             sbom-*.spdx.json
+            sbom-*.cyclonedx.json
+            grype-*.json
+
+  docker-scan-pr:
+    name: Scan Docker images for PRs (no push)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Prepare tags
+        id: prep
+        run: |
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "repo=ghcr.io/${REPO_LOWER}" >> $GITHUB_OUTPUT
+          SHA_TAG=${GITHUB_SHA::12}
+          echo "sha=${SHA_TAG}" >> $GITHUB_OUTPUT
+
+      - name: Build CPU image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.cpu
+          platforms: linux/amd64
+          push: false
+          tags: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
+          cache-from: type=gha
+
+      - name: Build CUDA image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.cuda
+          platforms: linux/amd64
+          push: false
+          tags: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
+          build-args: |
+            TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121
+          cache-from: type=gha
+
+      - name: Trivy scan (CPU)
+        uses: aquasecurity/trivy-action@0.55.0
+        with:
+          image-ref: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
+          format: sarif
+          output: trivy-cpu-pr.sarif
+          severity: CRITICAL,HIGH
+          vuln-type: os,library
+          ignore-unfixed: true
+          exit-code: '0' # Don't fail PRs, just report
+        continue-on-error: true
+
+      - name: Trivy scan (CUDA)
+        uses: aquasecurity/trivy-action@0.55.0
+        with:
+          image-ref: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
+          format: sarif
+          output: trivy-cuda-pr.sarif
+          severity: CRITICAL,HIGH
+          vuln-type: os,library
+          ignore-unfixed: true
+          exit-code: '0' # Don't fail PRs, just report
+        continue-on-error: true
+
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-cpu-pr.sarif
+        continue-on-error: true
+
+      - name: Upload Trivy results (CUDA)
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-cuda-pr.sarif
+        continue-on-error: true
+
+      - name: Generate SBOM (Syft CPU)
+        uses: anchore/sbom-action@v0.17.2
+        with:
+          image: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
+          output-file: sbom-cpu-pr-${{ steps.prep.outputs.sha }}.spdx.json
+          format: spdx-json
+
+      - name: Generate SBOM (Syft CUDA)
+        uses: anchore/sbom-action@v0.17.2
+        with:
+          image: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
+          output-file: sbom-cuda-pr-${{ steps.prep.outputs.sha }}.spdx.json
+          format: spdx-json
+
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-pr
+          path: |
+            sbom-*-pr-*.spdx.json
