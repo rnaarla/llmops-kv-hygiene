@@ -44,6 +44,9 @@ def test_verify_logs_main_success(tmp_path, monkeypatch, capsys):
     base = tmp_path / "kv_cache.log"
     _make_chain(base, rotations=1, entries_per=4, max_bytes=200)
     out_json = tmp_path / "verdict.json"
+    # Use a large retention-days value so prune_rotated is a no-op (avoids timing-related
+    # edge cases in CI where extremely fast rotations + retention pruning could remove
+    # freshly created rotated files before second verification pass).
     argv = [
         "--log-dir",
         str(tmp_path),
@@ -52,7 +55,7 @@ def test_verify_logs_main_success(tmp_path, monkeypatch, capsys):
         "--out",
         str(out_json),
         "--retention-days",
-        "0",
+        "365",
         "--max-rotated",
         "5",
     ]
