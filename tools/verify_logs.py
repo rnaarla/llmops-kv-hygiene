@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from .forensic_logger import ForensicLogger
+from .log_pruner import prune_rotated_logs
 
 
 def verify_all_and_write(log_path: Path, out_path: Path | None = None) -> dict:
@@ -25,60 +26,9 @@ def verify_all_and_write(log_path: Path, out_path: Path | None = None) -> dict:
     return res
 
 
-def prune_rotated(
-    log_path: Path,
-    *,
-    retention_days: int | None = None,
-    max_rotated: int | None = None,
-    archive_dir: Path | None = None,
-) -> list[str]:
-    """Prune rotated logs based on age or count. Returns list of removed file names.
-
-    Rotated files are named '<stem>-<ts>.log'. Active file '<stem>.log' is never removed.
-    """
-    removed: list[str] = []
-    base = log_path
-    stem = base.stem
-    directory = base.parent
-    rotated = sorted(directory.glob(f"{stem}-*.log"), key=lambda p: p.name)
-
-    # By age
-    if retention_days is not None and retention_days >= 0:
-        cutoff = time.time() - (retention_days * 86400)
-        for p in list(rotated):
-            try:
-                ts_part = p.stem.split("-")[-1]
-                ts = int(ts_part)
-            except Exception:  # pragma: no cover - malformed rotated filename
-                # If name doesn't parse as timestamp, fall back to mtime and log debug
-                import logging
-
-                logging.debug("prune_rotated: filename timestamp parse failed", exc_info=True)
-                ts = int(p.stat().st_mtime)
-            if ts < cutoff:
-                if archive_dir:
-                    archive_dir.mkdir(parents=True, exist_ok=True)
-                    dest = archive_dir / p.name
-                    p.replace(dest)
-                else:
-                    p.unlink(missing_ok=True)
-                removed.append(p.name)
-                rotated.remove(p)
-
-    # By count (keep newest N)
-    if max_rotated is not None and max_rotated >= 0 and len(rotated) > max_rotated:
-        to_remove = rotated[:-max_rotated]
-        for p in to_remove:
-            if archive_dir:
-                archive_dir.mkdir(parents=True, exist_ok=True)
-                dest = archive_dir / p.name
-                p.replace(dest)
-            else:
-                p.unlink(missing_ok=True)
-            removed.append(p.name)
-        # Not strictly needed to update list further
-
-    return removed
+def prune_rotated(*args, **kwargs):  # backward compatibility wrapper
+    """Deprecated wrapper for compatibility; use prune_rotated_logs instead."""
+    return prune_rotated_logs(*args, **kwargs)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -126,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
     ok_before = bool(res_before.get("ok", False))
 
     # Enforce retention if configured
-    removed = prune_rotated(
+    removed = prune_rotated_logs(
         base,
         retention_days=retention_days,
         max_rotated=max_rotated,
