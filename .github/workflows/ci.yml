@@ -162,7 +162,8 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: reports-and-forensics-${{ matrix.os }}
+          # Include python version to ensure uniqueness across matrix jobs
+          name: reports-and-forensics-${{ matrix.os }}-${{ matrix.python-version }}
           path: |
             reports/**
             forensics/**
