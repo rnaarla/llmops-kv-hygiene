@@ -20,27 +20,19 @@ jobs:
         target: [image, fs]
     env:
       IMAGE_REPO: ghcr.io/${{ github.repository }}
-      SHORT_SHA: ${{ github.sha.substr(0,7) }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Derive short SHA
+        id: sha
+        run: echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
       - name: Derive image tag
         id: meta
         run: |
-          echo "tag=cpu-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
-          echo "image=${IMAGE_REPO}:cpu-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
-
-      - name: Set up Trivy
-        uses: aquasecurity/setup-trivy@v0.2.1
-
-      - name: Cache Trivy DB
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/trivy
-          key: trivy-db-${{ runner.os }}-${{ github.run-id }}
-          restore-keys: |
-            trivy-db-${{ runner.os }}
+          echo "tag=cpu-${{ steps.sha.outputs.short_sha }}" >> "$GITHUB_OUTPUT"
+          echo "image=${IMAGE_REPO}:cpu-${{ steps.sha.outputs.short_sha }}" >> "$GITHUB_OUTPUT"
 
       # Optionally pull image (in case build workflow already pushed it); ignore errors if not present.
       - name: Attempt docker pull (best-effort)
@@ -49,17 +41,19 @@ jobs:
           docker pull "${{ steps.meta.outputs.image }}" || echo "Image not yet published; scan will likely fail unless image exists."
 
       - name: Run Trivy (table report)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           scan-type: ${{ matrix.target }}
           image-ref: ${{ matrix.target == 'image' && steps.meta.outputs.image || '' }}
-          format: 'table'
-          scanners: 'vuln,secret'
-          severity: 'CRITICAL,HIGH'
+          format: table
+          scanners: vuln,secret
+          severity: CRITICAL,HIGH
           ignore-unfixed: true
-          exit-code: '0'  # never fail pipeline on vulnerability presence; gating handled elsewhere
+          exit-code: '0'       # never fail pipeline on vulnerability presence; gating handled elsewhere
+          cache: true
+          skip-setup-trivy: false
           output: trivy-${{ matrix.target }}-results.txt
-          timeout: '10m'
+          timeout: 10m
 
       - name: Upload table results
         if: always()
@@ -69,17 +63,19 @@ jobs:
           path: trivy-${{ matrix.target }}-results.txt
 
       - name: Run Trivy (SARIF report)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           scan-type: ${{ matrix.target }}
           image-ref: ${{ matrix.target == 'image' && steps.meta.outputs.image || '' }}
-          format: 'sarif'
-          scanners: 'vuln'
-          severity: 'CRITICAL,HIGH'
+          format: sarif
+          scanners: vuln
+          severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: '0'
+          cache: true
+          skip-setup-trivy: false
           output: trivy-${{ matrix.target }}-results.sarif
-          timeout: '10m'
+          timeout: 10m
 
       - name: Upload SARIF to GitHub Security tab
         if: always()
@@ -87,7 +83,7 @@ jobs:
         with:
           sarif_file: trivy-${{ matrix.target }}-results.sarif
 
-      # Uncomment the gating step below to enforce failing the pipeline when new critical/high vulns appear.
+      # Uncomment this to enforce fail on HIGH/CRITICAL
       # - name: Fail on critical/high (future policy)
       #   if: always() && matrix.target == 'image'
       #   run: |
@@ -103,24 +99,29 @@ jobs:
       - name: Download scan artifacts
         uses: actions/download-artifact@v4
         with:
-            path: trivy-reports
+          path: trivy-reports
 
       - name: Send Slack Notification
-        if: always() && secrets.SLACK_WEBHOOK != ''
+        if: always() && env.SLACK_WEBHOOK != ''
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
         run: |
           echo "Sending Slack notification..."
           curl -X POST -H 'Content-type: application/json' \
             --data "{\"text\":\"Trivy scan completed. Reports: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\"}" \
-            ${{ secrets.SLACK_WEBHOOK }} || echo "Slack notification failed or not configured"
+            "$SLACK_WEBHOOK" || echo "Slack notification failed or not configured"
 
       - name: Send Email Notification
-        if: always() && secrets.MAIL_USERNAME != '' && secrets.MAIL_PASSWORD != ''
+        if: always() && env.MAIL_USERNAME != '' && env.MAIL_PASSWORD != ''
         uses: dawidd6/action-send-mail@v3
+        env:
+          MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}
+          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
         with:
           server_address: smtp.gmail.com
           server_port: 465
-          username: ${{ secrets.MAIL_USERNAME }}
-          password: ${{ secrets.MAIL_PASSWORD }}
+          username: ${{ env.MAIL_USERNAME }}
+          password: ${{ env.MAIL_PASSWORD }}
           subject: "Trivy Scan Completed - ${{ github.repository }}"
           body: "Trivy scan finished. Reports: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           to: "security-team@example.com"
