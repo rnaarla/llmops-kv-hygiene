@@ -57,3 +57,14 @@ def test_audit_main_with_multiple_violations(monkeypatch, tmp_path):
     assert "attr-defined" in joined
     assert "assignment" in joined
     assert "decoy" not in joined
+
+
+def test_scan_file_malformed_pattern_non_violation(tmp_path):
+    # Create a line that includes the marker substring but intentionally breaks regex expectations:
+    # Add trailing alpha characters so it is neither bare (due to extra chars) nor has [] for codes.
+    pfx = "# type:"
+    ign = " ignore"
+    malformed = f"value = 9  {pfx}{ign}MALFORMEDsuffix\n"
+    f = _mk(tmp_path, "malformed.py", malformed)
+    violations = audit.scan_file(f)
+    assert violations == []  # Should not flag as violation

@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from tools import sanitizer
 
 
@@ -101,6 +103,13 @@ def test_sample_indices_all_cases():
     assert len(s) == 3 and s == sorted(s) and len(set(s)) == 3
 
 
+def test_sample_indices_determinism():
+    f = sanitizer._sample_indices
+    a = f(50, 7)
+    b = f(50, 7)
+    assert a == b  # deterministic
+
+
 def test_verify_zero_none_samples():
     buf = DummyBuf(None, "cpu", 0)
     assert sanitizer.verify_zero(buf, None) is True
@@ -118,3 +127,22 @@ def test_verify_zero_torch_like(monkeypatch):
     sanitizer.zeroize_cpu(buf)
     ok = sanitizer.verify_zero(buf, samples=3)
     assert ok is True
+
+
+def test_sanitize_sync_cuda_simulated(monkeypatch):
+    # Simulate a CUDA device path using a minimal tensor stub when torch present.
+    torch_mod = sanitizer.torch
+    if torch_mod is None:
+        pytest.skip("torch not installed")
+    tensor = torch_mod.ones(
+        4, device="cpu"
+    )  # still CPU but device string on buf triggers cuda branch
+    buf = DummyBuf(tensor, "cuda:0", tensor.numel() * tensor.element_size())
+
+    # Monkeypatch zeroize_cuda to simulate scheduled False branch and then size accounting
+    def fake_zeroize_cuda(b, async_):  # noqa: D401
+        return False
+
+    monkeypatch.setattr(sanitizer, "zeroize_cuda", fake_zeroize_cuda)
+    res = sanitizer.sanitize_sync(buf, verify=False, samples=None)
+    assert res.scrubbed_bytes == tensor.numel() * tensor.element_size()
