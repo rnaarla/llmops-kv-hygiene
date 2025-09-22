@@ -659,8 +659,7 @@ class CacheTracer:
     def _buffer_numel(t: Any) -> int:
         if hasattr(t, "numel"):
             try:
-                numel_fn = getattr(t, "numel")
-                return int(numel_fn())
+                return int(t.numel())
             except Exception:  # pragma: no cover
                 return 0
         if hasattr(t, "size"):

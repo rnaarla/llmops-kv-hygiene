@@ -1,10 +1,9 @@
-"""
-Activation Logger: hooks into inference to log rare or unexpected activations.
+"""Activation Logger.
 
-Provides simple anomaly detection by tracking activation statistics per layer and
-flagging outliers. Intended for runtime monitoring during tests/fuzzing.
+Hooks into inference to log rare or unexpected activations. Provides simple anomaly
+detection by tracking activation statistics per layer and flagging outliers. Intended
+for runtime monitoring during tests/fuzzing.
 """
-
 from __future__ import annotations
 
 import json
@@ -15,7 +14,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from typing import Any
 try:  # pragma: no cover - optional
     import torch as _torch  # noqa: F401
     torch: Any = _torch

@@ -1,9 +1,7 @@
-import json
-import os
 from pathlib import Path
 
-from tools.forensic_logger import ForensicLogger
 from tools import verify_logs
+from tools.forensic_logger import ForensicLogger
 
 
 def _make_base_log(tmp_path: Path) -> Path:
