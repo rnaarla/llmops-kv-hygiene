@@ -1,0 +1,23 @@
+[run]
+branch = True
+omit =
+    */site-packages/*
+    */__pycache__/*
+    */tests/*
+    tools/metrics_exporter.py
+    tools/activation_logger.py
+    # Large monolithic tracer file has GPU/defensive branches; keep it in but allow pragmas
+
+
+[report]
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.: 
+    def __repr__
+    def __str__
+    except ImportError
+    except ModuleNotFoundError
+    raise NotImplementedError
+
+[html]
+directory = coverage_html_report

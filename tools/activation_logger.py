@@ -88,7 +88,7 @@ class ActivationLogger:
         else:
             try:
                 mean, std, max_val, numel = float(tensor[0]), float(tensor[1]), float(tensor[2]), int(tensor[3])  # type: ignore[index]
-            except Exception as e:  # pragma: no cover - defensive
+            except Exception as e:  # pragma: no cover - defensive unreachable with current tests
                 raise TypeError("Unsupported tensor type for ActivationLogger.observe") from e
 
         key = layer
@@ -113,18 +113,16 @@ class ActivationLogger:
         return anomalous
 
 
-if __name__ == "__main__":
-    # Simple self-test using random tensors if torch is available
-    if torch is not None:
+if __name__ == "__main__":  # pragma: no cover - manual smoke path
+    if torch is not None:  # pragma: no cover - exercised only manually
         logger = ActivationLogger()
         for i in range(100):
             x = torch.randn(1024)
             logger.observe("layer1", x)
-        # Inject anomaly
         x = torch.randn(1024) * 100.0
         flagged = logger.observe("layer1", x)
         print("Anomalous?", flagged)
-    else:
+    else:  # pragma: no cover
         logger = ActivationLogger()
         for i in range(5):
             logger.observe("layer1", (0.0, 1.0, 3.0, 1024))

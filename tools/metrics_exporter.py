@@ -36,7 +36,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - integration path
     httpd = HTTPServer((BIND, PORT), Handler)
     print(f"serving metrics from {METRICS_FILE} on {BIND}:{PORT} at /metrics", flush=True)
     httpd.serve_forever()

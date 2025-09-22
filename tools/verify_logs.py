@@ -8,7 +8,7 @@ import sys
 import time
 from typing import Optional, List
 
-from tools.cache_tracer import ForensicLogger
+from .forensic_logger import ForensicLogger
 
 
 def verify_all_and_write(log_path: Path, out_path: Optional[Path] = None) -> dict:
@@ -115,5 +115,5 @@ def main(argv: Optional[list[str]] = None) -> int:
     return 0 if (ok_before and ok_after) else 2
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - CLI entry
     sys.exit(main())
