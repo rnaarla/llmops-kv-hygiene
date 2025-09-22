@@ -7,11 +7,13 @@ from typing import Any
 # Optional dependencies treated as Any when absent to simplify typing
 try:  # pragma: no cover - optional dependency
     import numpy as _np  # noqa: F401
+
     np: Any = _np
 except Exception:  # pragma: no cover
     np = None
 try:  # pragma: no cover - optional dependency
     import torch as _torch  # noqa: F401
+
     torch: Any = _torch
 except Exception:  # pragma: no cover
     torch = None
@@ -58,6 +60,7 @@ def zeroize_cpu(buf: Any) -> int:
             nbytes = int(arr.numel() * arr.element_size())
         except Exception:  # pragma: no cover - defensive size calc
             import logging
+
             logging.debug("zeroize_cpu: failed to compute tensor size", exc_info=True)
             nbytes = 0
         try:
@@ -69,6 +72,7 @@ def zeroize_cpu(buf: Any) -> int:
                     arr.view(-1)[_i] = 0
         except Exception:  # pragma: no cover - defensive zeroing
             import logging
+
             logging.debug("zeroize_cpu: tensor zeroing failed", exc_info=True)
             return 0
         return nbytes
@@ -79,6 +83,7 @@ def zeroize_cpu(buf: Any) -> int:
             arr.fill(0)
         except Exception:  # pragma: no cover - numpy fill
             import logging
+
             logging.debug("zeroize_cpu: numpy fill failed", exc_info=True)
             return 0
         return nbytes

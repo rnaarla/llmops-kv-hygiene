@@ -52,6 +52,7 @@ def prune_rotated(
             except Exception:  # pragma: no cover - malformed rotated filename
                 # If name doesn't parse as timestamp, fall back to mtime and log debug
                 import logging
+
                 logging.debug("prune_rotated: filename timestamp parse failed", exc_info=True)
                 ts = int(p.stat().st_mtime)
             if ts < cutoff:

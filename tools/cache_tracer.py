@@ -46,11 +46,13 @@ from .policies import evaluate_policies
 # Optional deps
 try:  # pragma: no cover - optional dependency
     import numpy as _np  # noqa: F401
+
     np: Any = _np
 except Exception:  # pragma: no cover
     np = None
 try:  # pragma: no cover - optional dependency
     import torch as _torch  # noqa: F401
+
     torch: Any = _torch
 except Exception:  # pragma: no cover
     torch = None
@@ -688,6 +690,7 @@ class CacheTracer:
     def _is_numpy_array(t: Any) -> bool:
         try:
             import numpy as _np
+
             return isinstance(t, _np.ndarray)
         except Exception:  # pragma: no cover - fallback  # noqa: BLE001
             logging.debug("_is_numpy_array: NumPy fast-path failed", exc_info=True)

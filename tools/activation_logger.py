@@ -4,6 +4,7 @@ Hooks into inference to log rare or unexpected activations. Provides simple anom
 detection by tracking activation statistics per layer and flagging outliers. Intended
 for runtime monitoring during tests/fuzzing.
 """
+
 from __future__ import annotations
 
 import json
@@ -16,6 +17,7 @@ from typing import Any
 
 try:  # pragma: no cover - optional
     import torch as _torch  # noqa: F401
+
     torch: Any = _torch
 except Exception:  # pragma: no cover
     torch = None
@@ -115,12 +117,11 @@ class ActivationLogger:
                 )
             except Exception as e:  # pragma: no cover - defensive unreachable with current tests
                 import logging
+
                 logging.debug(
                     "ActivationLogger.observe: failed tuple-like stats extraction", exc_info=True
                 )
-                raise TypeError(
-                    "Unsupported tensor type for ActivationLogger.observe"
-                ) from e
+                raise TypeError("Unsupported tensor type for ActivationLogger.observe") from e
 
         key = layer
         with self._lock:

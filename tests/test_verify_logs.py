@@ -75,6 +75,7 @@ def test_prune_rotated_age_only(tmp_path):
     base = tmp_path / "kv_cache.log"
     base.write_text("{}\n")
     import time as _time
+
     now = int(_time.time())
     old_ts = [now - 400, now - 300]
     for ts in old_ts:
@@ -90,6 +91,7 @@ def test_prune_rotated_count_only(tmp_path):
     base = tmp_path / "kv_cache.log"
     base.write_text("{}\n")
     import time as _time
+
     now = int(_time.time())
     ts_values = [now - 400, now - 300, now - 200, now - 100]
     for ts in ts_values:

@@ -23,9 +23,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:  # pragma: no cover - defensive formatting fallback
             # We intentionally avoid raising here; fall back to raw format string
             msg = format
-        sys.stderr.write(
-            f"{self.address_string()} - - [{self.log_date_time_string()}] {msg}\n"
-        )
+        sys.stderr.write(f"{self.address_string()} - - [{self.log_date_time_string()}] {msg}\n")
 
     def do_GET(self):
         if self.path != "/metrics":
