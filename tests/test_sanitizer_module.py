@@ -4,27 +4,17 @@ import pytest
 
 from tools import sanitizer as sanitizer_mod
 
-try:
-    import numpy as np  # type: ignore
-except Exception:  # pragma: no cover
-    np = None  # type: ignore
-
-try:  # pragma: no cover - optional
-    import torch  # type: ignore
-except Exception:  # pragma: no cover
-    torch = None  # type: ignore
-
 
 def make_np_buf(size: int = 32):
-    if np is None:
+    try:
+        import numpy as np
+    except Exception:  # pragma: no cover
         pytest.skip("NumPy not available")
     arr = np.random.rand(size).astype("float32")  # non-zero initial
     return SimpleNamespace(_tensor=arr, device="cpu", nbytes=arr.nbytes)
 
 
 def test_sanitize_sync_numpy_success():
-    if np is None:
-        pytest.skip("NumPy not available")
     buf = make_np_buf(16)
     # Perform zeroization without verification first
     res = sanitizer_mod.sanitize_sync(buf, verify=True, samples=8)
@@ -35,8 +25,6 @@ def test_sanitize_sync_numpy_success():
 
 
 def test_verify_zero_failure_numpy():
-    if np is None:
-        pytest.skip("NumPy not available")
     buf = make_np_buf(32)
     # Determine ahead of time which indices will be sampled after zeroization
     samples = 8
@@ -49,7 +37,9 @@ def test_verify_zero_failure_numpy():
 
 
 def test_sanitize_sync_torch_cpu_if_available():  # pragma: no cover - executed only when torch present
-    if torch is None:
+    try:
+        import torch
+    except Exception:  # pragma: no cover
         pytest.skip("torch not available")
     t = torch.zeros(10, dtype=torch.float32)
     buf = SimpleNamespace(_tensor=t, device="cpu", nbytes=t.numel() * t.element_size())

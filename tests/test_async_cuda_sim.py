@@ -7,7 +7,7 @@ from tools.cache_tracer import CacheTracer
 try:  # optional torch simulation if real torch absent
     import torch
 except Exception:  # pragma: no cover
-    torch = None
+    torch = None  # type: ignore[assignment]
 
 
 class FakeEvent:

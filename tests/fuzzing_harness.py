@@ -11,13 +11,13 @@ def _write_sentinel(tracer: CacheTracer, handle: str, value: float = 1.0) -> Non
     buf = tracer._get(handle)
     t = buf._tensor
     try:
-        import torch  # type: ignore
+        import torch
     except Exception:  # pragma: no cover
-        torch = None  # type: ignore
+        torch = None  # type: ignore[assignment]
     try:
-        import numpy as np  # type: ignore
+        import numpy as np
     except Exception:  # pragma: no cover
-        np = None  # type: ignore
+        np = None  # type: ignore[assignment]
 
     if torch is not None and isinstance(t, torch.Tensor):
         t.fill_(value)
@@ -29,13 +29,13 @@ def _assert_zero(tracer: CacheTracer, handle: str) -> None:
     buf = tracer._get(handle)
     t = buf._tensor
     try:
-        import torch  # type: ignore
+        import torch
     except Exception:  # pragma: no cover
-        torch = None  # type: ignore
+        torch = None  # type: ignore[assignment]
     try:
-        import numpy as np  # type: ignore
+        import numpy as np
     except Exception:  # pragma: no cover
-        np = None  # type: ignore
+        np = None  # type: ignore[assignment]
 
     if torch is not None and isinstance(t, torch.Tensor):
         if t.numel() > 0:

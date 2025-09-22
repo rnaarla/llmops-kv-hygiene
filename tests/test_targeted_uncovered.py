@@ -9,7 +9,7 @@ from tools.forensic_logger import ForensicLogger
 try:  # optional deps
     import numpy as np
 except Exception:  # pragma: no cover
-    np = None
+    np = None  # type: ignore[assignment]
 
 
 def _make_buf(size: int = 8):

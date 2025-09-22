@@ -3,7 +3,7 @@ import pytest
 try:
     import torch
 except Exception:  # pragma: no cover
-    torch = None
+    torch = None  # type: ignore[assignment]
 
 from tools.cache_tracer import CacheTracer
 

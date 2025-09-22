@@ -9,7 +9,7 @@ from tools.forensic_logger import ForensicLogger
 try:
     import numpy as np
 except Exception:  # pragma: no cover
-    np = None
+    np = None  # type: ignore[assignment]
 
 
 def test_double_pass_branch(tmp_path, monkeypatch):

@@ -42,7 +42,7 @@ def test_metrics_exporter_serves(tmp_path, monkeypatch):
     port = _free_port()
     monkeypatch.setenv("METRICS_FILE", str(metrics_file))
     monkeypatch.setenv("METRICS_PORT", str(port))
-    from tools import metrics_exporter  # type: ignore
+    from tools import metrics_exporter
 
     thread = threading.Thread(
         target=metrics_exporter.HTTPServer(
@@ -332,7 +332,7 @@ def test_metrics_exporter_empty_file(monkeypatch, tmp_path):
     port = _free_port()
     monkeypatch.setenv("METRICS_FILE", str(tmp_path / "missing.prom"))
     monkeypatch.setenv("METRICS_PORT", str(port))
-    from tools import metrics_exporter  # type: ignore
+    from tools import metrics_exporter
 
     server = metrics_exporter.HTTPServer((metrics_exporter.BIND, port), metrics_exporter.Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -503,7 +503,7 @@ def test_free_with_high_threshold_quarantine(tmp_path, monkeypatch):
 
 def test_pinned_torch_cpu(tmp_path):
     try:
-        import torch  # type: ignore
+        import torch
     except Exception:  # pragma: no cover
         pytest.skip("torch not available")
     tracer = CacheTracer(log_path=str(tmp_path / "kv_cache.log"))
