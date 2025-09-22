@@ -1,9 +1,7 @@
 import json
-import os
 import socket
 import threading
 import time
-from pathlib import Path
 from http.client import HTTPConnection
 
 import pytest
@@ -86,7 +84,7 @@ def test_activation_logger_anomaly(tmp_path):
     flagged = logger.observe("layer1", (100.0, 0.0, 100.0, 1))
     assert flagged is True
     lines = (tmp_path / "acts.jsonl").read_text().strip().splitlines()
-    assert any("anomalous" in ln for ln in lines)
+    assert any("anomalous" in line for line in lines)
 
 
 def test_verify_logs_rotation_and_prune(tmp_path):
@@ -423,7 +421,9 @@ def test_metrics_exporter_main(tmp_path, monkeypatch):
     monkeypatch.setenv("METRICS_FILE", str(prom_path))
     monkeypatch.setenv("METRICS_PORT", "8123")
     monkeypatch.setenv("METRICS_BIND", "127.0.0.1")
-    import subprocess, sys, time as _time
+    import subprocess
+    import sys
+    import time as _time
     proc = subprocess.Popen([sys.executable, "tools/metrics_exporter.py"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     # Give it a moment to start then terminate
     _time.sleep(0.3)

@@ -3,10 +3,9 @@ import os
 import time
 import subprocess
 import sys
-from pathlib import Path
 from http.client import HTTPConnection
 
-import pytest
+import pytest  # noqa: F401  # Left for potential future parametrization
 
 from tools.cache_tracer import CacheTracer, ForensicLogger
 from tools.eviction_checker import main as eviction_main
@@ -127,14 +126,14 @@ def test_activation_logger_anomaly_variants(tmp_path):
     for _ in range(10):
         logger.observe("L1", (0.0, 0.0, 0.0, 4), rate_limit_hz=None)  # no rate limit so all logged
     # z-score anomaly: sudden mean shift
-    flagged1 = logger.observe("L1", (50.0, 0.0, 50.0, 4), rate_limit_hz=None)
+    logger.observe("L1", (50.0, 0.0, 50.0, 4), rate_limit_hz=None)
     # max_val anomaly with zero std baseline (new layer)
-    flagged2 = logger.observe("L2", (0.0, 0.0, 500.0, 4), rate_limit_hz=None)
+    logger.observe("L2", (0.0, 0.0, 500.0, 4), rate_limit_hz=None)
     # rate limited layer: only first logs
     logger.observe("L3", (0.0, 0.0, 0.0, 1), rate_limit_hz=5.0)
     logger.observe("L3", (100.0, 0.0, 100.0, 1), rate_limit_hz=5.0)
     lines = (tmp_path / "acts.jsonl").read_text().strip().splitlines()
-    parsed = [json.loads(l) for l in lines]
+    parsed = [json.loads(line) for line in lines]
     assert any(p["anomalous"] for p in parsed if p["layer"] == "L1")
     assert any(p["anomalous"] for p in parsed if p["layer"] == "L2")
     # Second L3 anomaly shouldn't have logged due to rate limiting

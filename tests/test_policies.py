@@ -1,5 +1,4 @@
 import time
-import pytest
 from tools.policies import evaluate_policies, check_ttl, check_reuse
 
 

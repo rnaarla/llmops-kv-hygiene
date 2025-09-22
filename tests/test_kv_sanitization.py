@@ -1,6 +1,3 @@
-import os
-import json
-import time
 import pytest
 
 from tools.cache_tracer import CacheTracer, ForensicLogger, FreeWithoutSanitize
@@ -172,6 +169,6 @@ def test_prometheus_lines(tmp_path):
     p = tmp_path / "metrics.prom"
     tracer.export_metrics_prometheus(p)
     lines = p.read_text().strip().splitlines()
-    assert any(l.startswith("kv_hygiene_unsanitized_regions ") for l in lines)
-    assert any(l.startswith("kv_hygiene_quarantine_count ") for l in lines)
-    assert any(l.startswith("kv_hygiene_min_coverage_pct ") for l in lines)
+    assert any(line.startswith("kv_hygiene_unsanitized_regions ") for line in lines)
+    assert any(line.startswith("kv_hygiene_quarantine_count ") for line in lines)
+    assert any(line.startswith("kv_hygiene_min_coverage_pct ") for line in lines)

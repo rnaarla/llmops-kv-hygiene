@@ -2,7 +2,6 @@ import json
 import os
 import time
 from pathlib import Path
-import sys
 
 from tools.forensic_logger import ForensicLogger
 from tools import verify_logs

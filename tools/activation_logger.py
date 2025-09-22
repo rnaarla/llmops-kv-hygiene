@@ -6,7 +6,7 @@ flagging outliers. Intended for runtime monitoring during tests/fuzzing.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 import json
 from pathlib import Path
@@ -86,8 +86,8 @@ class ActivationLogger:
             max_val = float(t.abs().max().item()) if t.numel() > 0 else 0.0
             numel = int(t.numel())
         else:
-            try:
-                mean, std, max_val, numel = float(tensor[0]), float(tensor[1]), float(tensor[2]), int(tensor[3])  # type: ignore[index]
+            try:  # type: ignore[index]
+                mean, std, max_val, numel = float(tensor[0]), float(tensor[1]), float(tensor[2]), int(tensor[3])
             except Exception as e:  # pragma: no cover - defensive unreachable with current tests
                 raise TypeError("Unsupported tensor type for ActivationLogger.observe") from e
 

@@ -1,6 +1,4 @@
-import os
 import time
-from pathlib import Path
 
 from tools.forensic_logger import ForensicLogger
 

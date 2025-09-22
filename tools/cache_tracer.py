@@ -24,10 +24,7 @@ Notes:
 """
 from __future__ import annotations
 
-from dataclasses import field
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Tuple, Union
-import contextlib
-import hashlib
+from typing import Any, Dict, List, Optional, Tuple, Union, Iterable
 import json
 import math
 import os
@@ -36,12 +33,10 @@ import threading
 import time
 import uuid
 import logging
-import hmac
-import random
 
 from .forensic_logger import ForensicLogger
 from .buffer_model import KVBuffer
-from .metrics_utils import percentile
+# percentile imported elsewhere when needed; local implementation uses _percentile
 from .policies import evaluate_policies
 from . import sanitizer as sanitizer_mod
 
@@ -469,7 +464,7 @@ class CacheTracer:
                 max_reuse=buf.max_reuse,
             )
             ttl_violation = decision.ttl_violation
-            reuse_violation = decision.reuse_violation
+        # reuse_violation currently unused; kept in decision for future policy expansion
             tenant_id, request_id, model_id = buf.tenant_id, buf.request_id, buf.model_id
         self.logger.append({"event_type": "write", "handle": handle, "tenant_id": tenant_id, "request_id": request_id, "model_id": model_id})
         if ttl_violation:

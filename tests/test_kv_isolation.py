@@ -1,8 +1,6 @@
-import json
 import os
 import subprocess
 import sys
-import time
 import pytest
 
 from tools.cache_tracer import CacheTracer, ForensicLogger, UnknownHandle, FreeWithoutSanitize
@@ -87,7 +85,6 @@ def test_eviction_checker_cli_exit(tmp_path):
 def test_activation_logger_anomaly_and_rate_limit(tmp_path):
     path = tmp_path / "activations.jsonl"
     logger = ActivationLogger(out_path=str(path), z_threshold=3.0)
-    import numpy as np
 
     # warm-up normal values
     for _ in range(50):
