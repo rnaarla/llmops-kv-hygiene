@@ -58,6 +58,9 @@ def test_sanitize_sync_torch_cpu_if_available():  # pragma: no cover - executed 
         t.view(-1)[0] = 1.0
     res = sanitizer_mod.sanitize_sync(buf, verify=True, samples=4)
     assert res.scrubbed_bytes == buf.nbytes
-    assert res.coverage_pct in (100.0, 0.0)  # If sampling hit modified index pre-zeroization might report 0 coverage
+    assert res.coverage_pct in (
+        100.0,
+        0.0,
+    )  # If sampling hit modified index pre-zeroization might report 0 coverage
     # After zeroization tensor should be zeros
     assert torch.count_nonzero(t) == 0

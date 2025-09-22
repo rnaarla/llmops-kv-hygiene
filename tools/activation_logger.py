@@ -4,6 +4,7 @@ Activation Logger: hooks into inference to log rare or unexpected activations.
 Provides simple anomaly detection by tracking activation statistics per layer and
 flagging outliers. Intended for runtime monitoring during tests/fuzzing.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -47,14 +48,24 @@ class ActivationStats:
 class ActivationLogger:
     """Runtime activation monitor with basic z-score anomaly detection."""
 
-    def __init__(self, out_path: str = "forensics/activations.jsonl", z_threshold: float = 6.0) -> None:
+    def __init__(
+        self, out_path: str = "forensics/activations.jsonl", z_threshold: float = 6.0
+    ) -> None:
         self.path = Path(out_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.z_threshold = z_threshold
         self._stats: Dict[str, ActivationStats] = {}
         self._lock = threading.Lock()
 
-    def _record(self, layer: str, values: Tuple[float, float, float, int], *, anomalous: bool, tenant_id: Optional[str] = None, request_id: Optional[str] = None) -> None:
+    def _record(
+        self,
+        layer: str,
+        values: Tuple[float, float, float, int],
+        *,
+        anomalous: bool,
+        tenant_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+    ) -> None:
         ts = time.time()
         rec = {
             "schema": 1,
@@ -74,7 +85,15 @@ class ActivationLogger:
         with self.path.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
 
-    def observe(self, layer: str, tensor: Any, *, tenant_id: Optional[str] = None, request_id: Optional[str] = None, rate_limit_hz: Optional[float] = 10.0) -> bool:
+    def observe(
+        self,
+        layer: str,
+        tensor: Any,
+        *,
+        tenant_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+        rate_limit_hz: Optional[float] = 10.0,
+    ) -> bool:
         """Observe an activation tensor and log anomalies with optional rate limiting.
 
         Returns True if anomalous, False otherwise.
@@ -87,9 +106,18 @@ class ActivationLogger:
             numel = int(t.numel())
         else:
             try:  # type: ignore[index]
-                mean, std, max_val, numel = float(tensor[0]), float(tensor[1]), float(tensor[2]), int(tensor[3])
-            except Exception as e:  # pragma: no cover - defensive unreachable with current tests
-                raise TypeError("Unsupported tensor type for ActivationLogger.observe") from e
+                mean, std, max_val, numel = (
+                    float(tensor[0]),
+                    float(tensor[1]),
+                    float(tensor[2]),
+                    int(tensor[3]),
+                )
+            except (
+                Exception
+            ) as e:  # pragma: no cover - defensive unreachable with current tests
+                raise TypeError(
+                    "Unsupported tensor type for ActivationLogger.observe"
+                ) from e
 
         key = layer
         with self._lock:
@@ -107,9 +135,17 @@ class ActivationLogger:
                 setattr(stats, "_last_log_ts", now)
 
         z = 0.0 if baseline_std == 0.0 else abs(mean - baseline_mean) / baseline_std
-        anomalous = z > self.z_threshold or max_val > (baseline_mean + 10 * (baseline_std or 1.0))
+        anomalous = z > self.z_threshold or max_val > (
+            baseline_mean + 10 * (baseline_std or 1.0)
+        )
         if allow:
-            self._record(layer, (mean, std, max_val, numel), anomalous=anomalous, tenant_id=tenant_id, request_id=request_id)
+            self._record(
+                layer,
+                (mean, std, max_val, numel),
+                anomalous=anomalous,
+                tenant_id=tenant_id,
+                request_id=request_id,
+            )
         return anomalous
 
 

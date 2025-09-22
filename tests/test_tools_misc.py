@@ -25,7 +25,15 @@ def test_metrics_exporter_serves(tmp_path, monkeypatch):
     # Produce a metrics file via tracer
     metrics_file = tmp_path / "metrics.prom"
     tracer = CacheTracer(log_path=str(tmp_path / "kv_cache.log"))
-    h = tracer.allocate(tenant_id="t", request_id="r", model_id="m", shape=(8,), dtype="float32", device="cpu", framework="numpy")
+    h = tracer.allocate(
+        tenant_id="t",
+        request_id="r",
+        model_id="m",
+        shape=(8,),
+        dtype="float32",
+        device="cpu",
+        framework="numpy",
+    )
     tracer.mark_in_use(h)
     tracer.sanitize(h, async_=False, verify=True)
     tracer.free(h)
@@ -37,7 +45,12 @@ def test_metrics_exporter_serves(tmp_path, monkeypatch):
     monkeypatch.setenv("METRICS_PORT", str(port))
     from tools import metrics_exporter  # type: ignore
 
-    thread = threading.Thread(target=metrics_exporter.HTTPServer((metrics_exporter.BIND, port), metrics_exporter.Handler).serve_forever, daemon=True)
+    thread = threading.Thread(
+        target=metrics_exporter.HTTPServer(
+            (metrics_exporter.BIND, port), metrics_exporter.Handler
+        ).serve_forever,
+        daemon=True,
+    )
     thread.start()
     time.sleep(0.05)
 
@@ -56,7 +69,15 @@ def test_metrics_exporter_serves(tmp_path, monkeypatch):
 
 def test_eviction_checker_pass_and_fail(tmp_path, monkeypatch, capsys):
     tracer = CacheTracer(log_path=str(tmp_path / "kv_cache.log"))
-    h = tracer.allocate(tenant_id="t", request_id="r", model_id="m", shape=(4,), dtype="float32", device="cpu", framework="numpy")
+    h = tracer.allocate(
+        tenant_id="t",
+        request_id="r",
+        model_id="m",
+        shape=(4,),
+        dtype="float32",
+        device="cpu",
+        framework="numpy",
+    )
     tracer.mark_in_use(h)
     tracer.sanitize(h, async_=False, verify=True)
     tracer.free(h)
@@ -64,14 +85,38 @@ def test_eviction_checker_pass_and_fail(tmp_path, monkeypatch, capsys):
     tracer.export_metrics(str(metrics_json))
 
     # Passing run
-    rc = eviction_main([str(metrics_json), "--coverage-min", "99.0", "--unsanitized-max", "0", "--quarantine-max", "0", "--out", str(tmp_path / "verdict.json")])
+    rc = eviction_main(
+        [
+            str(metrics_json),
+            "--coverage-min",
+            "99.0",
+            "--unsanitized-max",
+            "0",
+            "--quarantine-max",
+            "0",
+            "--out",
+            str(tmp_path / "verdict.json"),
+        ]
+    )
     assert rc == 0
 
     # Modify metrics to force failure
     data = json.loads(metrics_json.read_text())
     data["min_coverage_pct"] = 10.0
     metrics_json.write_text(json.dumps(data))
-    rc2 = eviction_main([str(metrics_json), "--coverage-min", "99.0", "--unsanitized-max", "0", "--quarantine-max", "0", "--out", str(tmp_path / "verdict2.json")])
+    rc2 = eviction_main(
+        [
+            str(metrics_json),
+            "--coverage-min",
+            "99.0",
+            "--unsanitized-max",
+            "0",
+            "--quarantine-max",
+            "0",
+            "--out",
+            str(tmp_path / "verdict2.json"),
+        ]
+    )
     assert rc2 == 2
 
 
@@ -94,7 +139,15 @@ def test_verify_logs_rotation_and_prune(tmp_path):
     # Force extremely small rotation threshold
     tracer.logger._max_bytes = 600  # small so multiple rotations occur quickly
     for i in range(80):
-        h = tracer.allocate(tenant_id="t", request_id="r", model_id=f"m{i}", shape=(2,), dtype="float32", device="cpu", framework="numpy")
+        h = tracer.allocate(
+            tenant_id="t",
+            request_id="r",
+            model_id=f"m{i}",
+            shape=(2,),
+            dtype="float32",
+            device="cpu",
+            framework="numpy",
+        )
         tracer.mark_in_use(h)
         tracer.sanitize(h, async_=False, verify=True)
         tracer.free(h)
@@ -116,7 +169,16 @@ def test_verify_logs_rotation_and_prune(tmp_path):
 
 def test_ttl_violation(tmp_path):
     tracer = CacheTracer(log_path=str(tmp_path / "kv_cache.log"))
-    h = tracer.allocate(tenant_id="t", request_id="r", model_id="m", shape=(4,), dtype="float32", device="cpu", framework="numpy", ttl_sec=0)
+    h = tracer.allocate(
+        tenant_id="t",
+        request_id="r",
+        model_id="m",
+        shape=(4,),
+        dtype="float32",
+        device="cpu",
+        framework="numpy",
+        ttl_sec=0,
+    )
     tracer.mark_in_use(h)
     # TTL<=0 violation should quarantine on first use
     stats = tracer.get_metrics()
@@ -125,7 +187,16 @@ def test_ttl_violation(tmp_path):
 
 def test_reuse_path(tmp_path):
     tracer = CacheTracer(log_path=str(tmp_path / "kv_cache.log"))
-    h = tracer.allocate(tenant_id="t", request_id="r", model_id="m", shape=(4,), dtype="float32", device="cpu", framework="numpy", max_reuse=2)
+    h = tracer.allocate(
+        tenant_id="t",
+        request_id="r",
+        model_id="m",
+        shape=(4,),
+        dtype="float32",
+        device="cpu",
+        framework="numpy",
+        max_reuse=2,
+    )
     tracer.mark_in_use(h)
     # simulate reuse events
     tracer.mark_reuse(h)
@@ -137,7 +208,15 @@ def test_reuse_path(tmp_path):
 
 def test_verification_failure_quarantine(monkeypatch, tmp_path):
     tracer = CacheTracer(log_path=str(tmp_path / "kv_cache.log"))
-    h = tracer.allocate(tenant_id="t", request_id="r", model_id="m", shape=(8,), dtype="float32", device="cpu", framework="numpy")
+    h = tracer.allocate(
+        tenant_id="t",
+        request_id="r",
+        model_id="m",
+        shape=(8,),
+        dtype="float32",
+        device="cpu",
+        framework="numpy",
+    )
     tracer.mark_in_use(h)
     # Force _verify_zero to return False
     monkeypatch.setattr(tracer, "_verify_zero", lambda *a, **k: False)
@@ -154,7 +233,15 @@ def test_prune_archive_branch(tmp_path):
     tracer = CacheTracer(log_path=str(log_path))
     tracer.logger._max_bytes = 500
     for i in range(60):
-        h = tracer.allocate(tenant_id="t", request_id="r", model_id=f"m{i}", shape=(2,), dtype="float32", device="cpu", framework="numpy")
+        h = tracer.allocate(
+            tenant_id="t",
+            request_id="r",
+            model_id=f"m{i}",
+            shape=(2,),
+            dtype="float32",
+            device="cpu",
+            framework="numpy",
+        )
         tracer.mark_in_use(h)
         tracer.sanitize(h, async_=False, verify=True)
         tracer.free(h)
@@ -162,7 +249,10 @@ def test_prune_archive_branch(tmp_path):
     assert rotated
     archive = tmp_path / "archive"
     from tools.verify_logs import prune_rotated
-    removed = prune_rotated(log_path, retention_days=0, max_rotated=1, archive_dir=archive)
+
+    removed = prune_rotated(
+        log_path, retention_days=0, max_rotated=1, archive_dir=archive
+    )
     assert removed
     # ensure archived files exist
     assert any((archive / name).exists() for name in removed)
@@ -171,7 +261,15 @@ def test_prune_archive_branch(tmp_path):
 def test_hmac_chain(tmp_path, monkeypatch):
     monkeypatch.setenv("FORENSIC_HMAC_SECRET", "supersecret")
     tracer = CacheTracer(log_path=str(tmp_path / "kv_cache.log"))
-    h = tracer.allocate(tenant_id="t", request_id="r", model_id="m", shape=(4,), dtype="float32", device="cpu", framework="numpy")
+    h = tracer.allocate(
+        tenant_id="t",
+        request_id="r",
+        model_id="m",
+        shape=(4,),
+        dtype="float32",
+        device="cpu",
+        framework="numpy",
+    )
     tracer.mark_in_use(h)
     tracer.sanitize(h, async_=False, verify=True)
     tracer.free(h)
@@ -184,19 +282,49 @@ def test_verify_logs_main_cli(tmp_path, monkeypatch, capsys):
     log_dir.mkdir()
     tracer = CacheTracer(log_path=str(log_dir / "kv_cache.log"))
     for i in range(10):
-        h = tracer.allocate(tenant_id="t", request_id="r", model_id=f"m{i}", shape=(2,), dtype="float32", device="cpu", framework="numpy")
+        h = tracer.allocate(
+            tenant_id="t",
+            request_id="r",
+            model_id=f"m{i}",
+            shape=(2,),
+            dtype="float32",
+            device="cpu",
+            framework="numpy",
+        )
         tracer.mark_in_use(h)
         tracer.sanitize(h, async_=False, verify=True)
         tracer.free(h)
     from tools import verify_logs
-    rc = verify_logs.main(["--log-dir", str(log_dir), "--log-file", "kv_cache.log", "--out", str(tmp_path / "ver.json"), "--retention-days", "0", "--max-rotated", "3"])
+
+    rc = verify_logs.main(
+        [
+            "--log-dir",
+            str(log_dir),
+            "--log-file",
+            "kv_cache.log",
+            "--out",
+            str(tmp_path / "ver.json"),
+            "--retention-days",
+            "0",
+            "--max-rotated",
+            "3",
+        ]
+    )
     assert rc == 0
 
 
 def test_double_pass_enabled(tmp_path, monkeypatch):
     monkeypatch.setenv("KV_DOUBLE_PASS_DEFAULT", "true")
     tracer = CacheTracer(log_path=str(tmp_path / "kv_cache.log"))
-    h = tracer.allocate(tenant_id="t", request_id="r", model_id="m", shape=(16,), dtype="float32", device="cpu", framework="numpy")
+    h = tracer.allocate(
+        tenant_id="t",
+        request_id="r",
+        model_id="m",
+        shape=(16,),
+        dtype="float32",
+        device="cpu",
+        framework="numpy",
+    )
     tracer.mark_in_use(h)
     cov = tracer.sanitize(h, async_=False, verify=True)
     assert cov >= 99.9
@@ -208,7 +336,10 @@ def test_metrics_exporter_empty_file(monkeypatch, tmp_path):
     monkeypatch.setenv("METRICS_FILE", str(tmp_path / "missing.prom"))
     monkeypatch.setenv("METRICS_PORT", str(port))
     from tools import metrics_exporter  # type: ignore
-    server = metrics_exporter.HTTPServer((metrics_exporter.BIND, port), metrics_exporter.Handler)
+
+    server = metrics_exporter.HTTPServer(
+        (metrics_exporter.BIND, port), metrics_exporter.Handler
+    )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     time.sleep(0.05)
@@ -223,6 +354,7 @@ def test_metrics_exporter_empty_file(monkeypatch, tmp_path):
 
 def test_percentile_edges():
     from tools.cache_tracer import CacheTracer
+
     # Use protected method via tracer class to test logic
     assert CacheTracer._percentile([], 95) == 0.0
     assert CacheTracer._percentile([5], 50) == 5.0
@@ -233,7 +365,15 @@ def test_percentile_edges():
 
 def test_unsanitized_free_quarantine(tmp_path):
     tracer = CacheTracer(log_path=str(tmp_path / "kv_cache.log"))
-    h = tracer.allocate(tenant_id="t", request_id="r", model_id="m", shape=(8,), dtype="float32", device="cpu", framework="numpy")
+    h = tracer.allocate(
+        tenant_id="t",
+        request_id="r",
+        model_id="m",
+        shape=(8,),
+        dtype="float32",
+        device="cpu",
+        framework="numpy",
+    )
     # Intentionally skip sanitize
     with pytest.raises(Exception):
         tracer.free(h)
@@ -248,7 +388,15 @@ def test_env_defaults(monkeypatch, tmp_path):
     tracer = CacheTracer(log_path=str(tmp_path / "kv_cache.log"))
     assert abs(tracer.COVERAGE_THRESHOLD - 88.8) < 1e-6
     # Allocate small buffer to exercise sampling count path
-    h = tracer.allocate(tenant_id="t", request_id="r", model_id="m", shape=(3,), dtype="float32", device="cpu", framework="numpy")
+    h = tracer.allocate(
+        tenant_id="t",
+        request_id="r",
+        model_id="m",
+        shape=(3,),
+        dtype="float32",
+        device="cpu",
+        framework="numpy",
+    )
     tracer.mark_in_use(h)
     cov = tracer.sanitize(h, async_=False, verify=True)
     assert cov >= 100.0
@@ -256,7 +404,15 @@ def test_env_defaults(monkeypatch, tmp_path):
 
 def test_zero_length_buffer(tmp_path):
     tracer = CacheTracer(log_path=str(tmp_path / "kv_cache.log"))
-    h = tracer.allocate(tenant_id="t", request_id="r", model_id="m", shape=(0,), dtype="float32", device="cpu", framework="numpy")
+    h = tracer.allocate(
+        tenant_id="t",
+        request_id="r",
+        model_id="m",
+        shape=(0,),
+        dtype="float32",
+        device="cpu",
+        framework="numpy",
+    )
     tracer.mark_in_use(h)
     cov = tracer.sanitize(h, async_=False, verify=True)
     assert cov == 100.0
@@ -264,21 +420,38 @@ def test_zero_length_buffer(tmp_path):
 
 def test_tamper_detection(tmp_path):
     tracer = CacheTracer(log_path=str(tmp_path / "kv_cache.log"))
-    h = tracer.allocate(tenant_id="t", request_id="r", model_id="m", shape=(4,), dtype="float32", device="cpu", framework="numpy")
+    h = tracer.allocate(
+        tenant_id="t",
+        request_id="r",
+        model_id="m",
+        shape=(4,),
+        dtype="float32",
+        device="cpu",
+        framework="numpy",
+    )
     tracer.mark_in_use(h)
     tracer.sanitize(h, async_=False, verify=True)
     tracer.free(h)
     logf = tmp_path / "kv_cache.log"
     # Append a tampered line (breaking chain)
     with logf.open("a", encoding="utf-8") as f:
-        f.write("{\"curr_hash\": \"bad\"}\n")
+        f.write('{"curr_hash": "bad"}\n')
     res = ForensicLogger.verify_chain(str(logf))
     assert not res["ok"] and res["first_bad_line"] is not None
 
 
 def test_exceed_reuse_quarantine(tmp_path):
     tracer = CacheTracer(log_path=str(tmp_path / "kv_cache.log"))
-    h = tracer.allocate(tenant_id="t", request_id="r", model_id="m", shape=(4,), dtype="float32", device="cpu", framework="numpy", max_reuse=1)
+    h = tracer.allocate(
+        tenant_id="t",
+        request_id="r",
+        model_id="m",
+        shape=(4,),
+        dtype="float32",
+        device="cpu",
+        framework="numpy",
+        max_reuse=1,
+    )
     tracer.mark_in_use(h)
     tracer.mark_reuse(h)  # allowed once
     tracer.mark_reuse(h)  # should push toward violation
@@ -296,19 +469,37 @@ def test_hmac_mismatch_detection(tmp_path, monkeypatch):
     # First write with one secret
     monkeypatch.setenv("FORENSIC_HMAC_SECRET", "secret1")
     tracer = CacheTracer(log_path=str(tmp_path / "kv_cache.log"))
-    h = tracer.allocate(tenant_id="t", request_id="r", model_id="m", shape=(4,), dtype="float32", device="cpu", framework="numpy")
+    h = tracer.allocate(
+        tenant_id="t",
+        request_id="r",
+        model_id="m",
+        shape=(4,),
+        dtype="float32",
+        device="cpu",
+        framework="numpy",
+    )
     tracer.mark_in_use(h)
     tracer.sanitize(h, async_=False, verify=True)
     tracer.free(h)
     # Verification with wrong secret should fail
-    res = ForensicLogger.verify_chain(str(tmp_path / "kv_cache.log"), hmac_secret=b"wrong")
+    res = ForensicLogger.verify_chain(
+        str(tmp_path / "kv_cache.log"), hmac_secret=b"wrong"
+    )
     assert not res["ok"]
 
 
 def test_free_with_high_threshold_quarantine(tmp_path, monkeypatch):
     monkeypatch.setenv("KV_COVERAGE_THRESHOLD", "100.0")
     tracer = CacheTracer(log_path=str(tmp_path / "kv_cache.log"))
-    h = tracer.allocate(tenant_id="t", request_id="r", model_id="m", shape=(16,), dtype="float32", device="cpu", framework="numpy")
+    h = tracer.allocate(
+        tenant_id="t",
+        request_id="r",
+        model_id="m",
+        shape=(16,),
+        dtype="float32",
+        device="cpu",
+        framework="numpy",
+    )
     tracer.mark_in_use(h)
     # Force verification failure by monkeypatching _verify_zero to False BEFORE sanitize
     monkeypatch.setattr(tracer, "_verify_zero", lambda *a, **k: False)
@@ -323,7 +514,15 @@ def test_pinned_torch_cpu(tmp_path):
     except Exception:  # pragma: no cover
         pytest.skip("torch not available")
     tracer = CacheTracer(log_path=str(tmp_path / "kv_cache.log"))
-    h = tracer.allocate(tenant_id="t", request_id="r", model_id="m", shape=(4,), dtype=torch.float32, device="cpu", framework="torch")
+    h = tracer.allocate(
+        tenant_id="t",
+        request_id="r",
+        model_id="m",
+        shape=(4,),
+        dtype=torch.float32,
+        device="cpu",
+        framework="torch",
+    )
     tracer.mark_in_use(h)
     cov = tracer.sanitize(h, async_=False, verify=True)
     tracer.free(h)
@@ -332,7 +531,15 @@ def test_pinned_torch_cpu(tmp_path):
 
 def test_async_sanitize_early_return(monkeypatch, tmp_path):
     tracer = CacheTracer(log_path=str(tmp_path / "kv_cache.log"))
-    h = tracer.allocate(tenant_id="t", request_id="r", model_id="m", shape=(8,), dtype="float32", device="cpu", framework="numpy")
+    h = tracer.allocate(
+        tenant_id="t",
+        request_id="r",
+        model_id="m",
+        shape=(8,),
+        dtype="float32",
+        device="cpu",
+        framework="numpy",
+    )
     tracer.mark_in_use(h)
     # Patch _zeroize_buffer to simulate async scheduling
     monkeypatch.setattr(tracer, "_zeroize_buffer", lambda *a, **k: True)
@@ -347,7 +554,15 @@ def test_async_sanitize_early_return(monkeypatch, tmp_path):
 
 def test_double_free_idempotent(tmp_path):
     tracer = CacheTracer(log_path=str(tmp_path / "kv_cache.log"))
-    h = tracer.allocate(tenant_id="t", request_id="r", model_id="m", shape=(4,), dtype="float32", device="cpu", framework="numpy")
+    h = tracer.allocate(
+        tenant_id="t",
+        request_id="r",
+        model_id="m",
+        shape=(4,),
+        dtype="float32",
+        device="cpu",
+        framework="numpy",
+    )
     tracer.mark_in_use(h)
     tracer.sanitize(h, async_=False, verify=True)
     tracer.free(h)
@@ -357,7 +572,15 @@ def test_double_free_idempotent(tmp_path):
 
 def test_sanitize_without_verify(tmp_path):
     tracer = CacheTracer(log_path=str(tmp_path / "kv_cache.log"))
-    h = tracer.allocate(tenant_id="t", request_id="r", model_id="m", shape=(4,), dtype="float32", device="cpu", framework="numpy")
+    h = tracer.allocate(
+        tenant_id="t",
+        request_id="r",
+        model_id="m",
+        shape=(4,),
+        dtype="float32",
+        device="cpu",
+        framework="numpy",
+    )
     tracer.mark_in_use(h)
     cov = tracer.sanitize(h, async_=False, verify=False)
     assert cov == 100.0
@@ -370,7 +593,15 @@ def test_rotation_linkage_mismatch(tmp_path):
     tracer.logger._max_bytes = 400
     # Produce enough entries for rotation
     for i in range(40):
-        h = tracer.allocate(tenant_id="t", request_id="r", model_id=f"m{i}", shape=(2,), dtype="float32", device="cpu", framework="numpy")
+        h = tracer.allocate(
+            tenant_id="t",
+            request_id="r",
+            model_id=f"m{i}",
+            shape=(2,),
+            dtype="float32",
+            device="cpu",
+            framework="numpy",
+        )
         tracer.mark_in_use(h)
         tracer.sanitize(h, async_=False, verify=True)
         tracer.free(h)
@@ -386,6 +617,7 @@ def test_rotation_linkage_mismatch(tmp_path):
         except Exception:
             pass
     from tools.verify_logs import verify_all_and_write
+
     result = verify_all_and_write(log_path)
     assert result["ok"] is False
 
@@ -401,6 +633,7 @@ def test_unknown_handle_operations(tmp_path):
 
 def test_activation_logger_rate_limit(tmp_path):
     from tools.activation_logger import ActivationLogger
+
     logger = ActivationLogger(out_path=str(tmp_path / "acts.jsonl"), z_threshold=10.0)
     # Very low rate limit (2 Hz) and rapid observations; should not log every time
     for _ in range(5):
@@ -412,7 +645,15 @@ def test_activation_logger_rate_limit(tmp_path):
 def test_metrics_exporter_main(tmp_path, monkeypatch):
     # Generate a metrics file
     tracer = CacheTracer(log_path=str(tmp_path / "kv_cache.log"))
-    h = tracer.allocate(tenant_id="t", request_id="r", model_id="m", shape=(4,), dtype="float32", device="cpu", framework="numpy")
+    h = tracer.allocate(
+        tenant_id="t",
+        request_id="r",
+        model_id="m",
+        shape=(4,),
+        dtype="float32",
+        device="cpu",
+        framework="numpy",
+    )
     tracer.mark_in_use(h)
     tracer.sanitize(h, async_=False, verify=True)
     tracer.free(h)
@@ -424,7 +665,12 @@ def test_metrics_exporter_main(tmp_path, monkeypatch):
     import subprocess
     import sys
     import time as _time
-    proc = subprocess.Popen([sys.executable, "tools/metrics_exporter.py"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    proc = subprocess.Popen(
+        [sys.executable, "tools/metrics_exporter.py"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
     # Give it a moment to start then terminate
     _time.sleep(0.3)
     proc.terminate()

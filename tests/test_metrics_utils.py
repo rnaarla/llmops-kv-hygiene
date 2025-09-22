@@ -20,9 +20,9 @@ def test_percentile_invalid():
     with pytest.raises(ValueError):
         percentile([], 50)
     with pytest.raises(ValueError):
-        percentile([1,2,3], -1)
+        percentile([1, 2, 3], -1)
     with pytest.raises(ValueError):
-        percentile([1,2,3], 101)
+        percentile([1, 2, 3], 101)
 
 
 def test_percentile_interpolation():

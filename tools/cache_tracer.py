@@ -22,6 +22,7 @@ Notes:
 - For CPU/NumPy arrays, scrubbing is synchronous.
 - Coverage is computed as scrubbed_bytes/total_bytes and optionally verified via sampling.
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple, Union, Iterable
@@ -36,6 +37,7 @@ import logging
 
 from .forensic_logger import ForensicLogger
 from .buffer_model import KVBuffer
+
 # percentile imported elsewhere when needed; local implementation uses _percentile
 from .policies import evaluate_policies
 from . import sanitizer as sanitizer_mod
@@ -51,12 +53,15 @@ try:
 except Exception:  # pragma: no cover
     torch = None  # type: ignore
 
+
 # ----- Exceptions -----
 class HygieneViolation(Exception):
     pass
 
+
 class UnknownHandle(Exception):
     pass
+
 
 class FreeWithoutSanitize(HygieneViolation):
     pass
@@ -337,22 +342,35 @@ class CacheTracer:
 
     COVERAGE_THRESHOLD: float = 99.9
 
-    def __init__(self, log_path: Union[str, Path] = "forensics/kv_cache.log", *, coverage_threshold: float = 99.9, max_log_bytes: int = 5_000_000, double_pass_default: bool = False, verify_samples_default: int = 8, default_max_reuse: int = 0, default_ttl_sec: Optional[float] = None) -> None:
+    def __init__(
+        self,
+        log_path: Union[str, Path] = "forensics/kv_cache.log",
+        *,
+        coverage_threshold: float = 99.9,
+        max_log_bytes: int = 5_000_000,
+        double_pass_default: bool = False,
+        verify_samples_default: int = 8,
+        default_max_reuse: int = 0,
+        default_ttl_sec: Optional[float] = None,
+    ) -> None:
         self.logger = ForensicLogger(log_path, max_bytes=max_log_bytes)
         self._buffers: Dict[str, KVBuffer] = {}
         self._lock = threading.RLock()
         logging.getLogger(__name__).setLevel(logging.INFO)
+
         # Allow env overrides for sensible defaults
         def _env_bool(key: str, default: bool) -> bool:
             val = os.environ.get(key)
             if val is None:
                 return default
             return str(val).strip().lower() in {"1", "true", "yes", "on"}
+
         def _env_int(key: str, default: int) -> int:
             try:
                 return int(os.environ.get(key, default))
             except Exception:
                 return default
+
         def _env_float_opt(key: str, default: Optional[float]) -> Optional[float]:
             v = os.environ.get(key)
             if v is None or v == "":
@@ -361,9 +379,16 @@ class CacheTracer:
                 return float(v)
             except Exception:
                 return default
-        self.COVERAGE_THRESHOLD = float(os.environ.get("KV_COVERAGE_THRESHOLD", coverage_threshold))
-        self._double_pass_default = _env_bool("KV_DOUBLE_PASS_DEFAULT", double_pass_default)
-        self._verify_samples_default = _env_int("KV_VERIFY_SAMPLES_DEFAULT", verify_samples_default)
+
+        self.COVERAGE_THRESHOLD = float(
+            os.environ.get("KV_COVERAGE_THRESHOLD", coverage_threshold)
+        )
+        self._double_pass_default = _env_bool(
+            "KV_DOUBLE_PASS_DEFAULT", double_pass_default
+        )
+        self._verify_samples_default = _env_int(
+            "KV_VERIFY_SAMPLES_DEFAULT", verify_samples_default
+        )
         self._default_max_reuse = _env_int("KV_DEFAULT_MAX_REUSE", default_max_reuse)
         self._default_ttl_sec = _env_float_opt("KV_DEFAULT_TTL_SEC", default_ttl_sec)
         # Metrics
@@ -393,7 +418,9 @@ class CacheTracer:
         Returns a handle string used for subsequent operations.
         """
         handle = str(uuid.uuid4())
-        tensor, ptr, nbytes, dtype_str = self._create_buffer(shape, dtype, device, framework, pinned=pinned)
+        tensor, ptr, nbytes, dtype_str = self._create_buffer(
+            shape, dtype, device, framework, pinned=pinned
+        )
         buf = KVBuffer(
             handle=handle,
             tenant_id=tenant_id,
@@ -439,13 +466,24 @@ class CacheTracer:
                 raise UnknownHandle(f"Unknown handle: {handle}")
             return self._buffers[handle]
 
-    def bind(self, handle: str, *, stream_id: Optional[str] = None, stream: Any = None) -> None:
+    def bind(
+        self, handle: str, *, stream_id: Optional[str] = None, stream: Any = None
+    ) -> None:
         with self._lock:
             buf = self._get(handle)
             buf.stream_id = stream_id
             buf.stream_obj = stream
             buf.status = "bound"
-        self.logger.append({"event_type": "bind", "handle": handle, "tenant_id": buf.tenant_id, "request_id": buf.request_id, "model_id": buf.model_id, "stream_id": stream_id})
+        self.logger.append(
+            {
+                "event_type": "bind",
+                "handle": handle,
+                "tenant_id": buf.tenant_id,
+                "request_id": buf.request_id,
+                "model_id": buf.model_id,
+                "stream_id": stream_id,
+            }
+        )
 
     def mark_in_use(self, handle: str, *, stream: Any = None) -> None:
         with self._lock:
@@ -464,9 +502,21 @@ class CacheTracer:
                 max_reuse=buf.max_reuse,
             )
             ttl_violation = decision.ttl_violation
-        # reuse_violation currently unused; kept in decision for future policy expansion
-            tenant_id, request_id, model_id = buf.tenant_id, buf.request_id, buf.model_id
-        self.logger.append({"event_type": "write", "handle": handle, "tenant_id": tenant_id, "request_id": request_id, "model_id": model_id})
+            # reuse_violation currently unused; kept in decision for future policy expansion
+            tenant_id, request_id, model_id = (
+                buf.tenant_id,
+                buf.request_id,
+                buf.model_id,
+            )
+        self.logger.append(
+            {
+                "event_type": "write",
+                "handle": handle,
+                "tenant_id": tenant_id,
+                "request_id": request_id,
+                "model_id": model_id,
+            }
+        )
         if ttl_violation:
             self.quarantine(handle, reason="ttl_expired")
 
@@ -479,31 +529,59 @@ class CacheTracer:
             buf = self._get(handle)
             buf.reuse_count += 1
             self._reuse_events += 1
-            exceeded = buf.max_reuse is not None and buf.max_reuse >= 0 and buf.reuse_count > buf.max_reuse
-            tenant_id, request_id, model_id = buf.tenant_id, buf.request_id, buf.model_id
+            exceeded = (
+                buf.max_reuse is not None
+                and buf.max_reuse >= 0
+                and buf.reuse_count > buf.max_reuse
+            )
+            tenant_id, request_id, model_id = (
+                buf.tenant_id,
+                buf.request_id,
+                buf.model_id,
+            )
             reuse_count, max_reuse = buf.reuse_count, buf.max_reuse
         # Log reuse event
-        self.logger.append({
-            "event_type": "reuse",
-            "handle": handle,
-            "tenant_id": tenant_id,
-            "request_id": request_id,
-            "model_id": model_id,
-            "reuse_count": reuse_count,
-            "max_reuse": max_reuse,
-        })
+        self.logger.append(
+            {
+                "event_type": "reuse",
+                "handle": handle,
+                "tenant_id": tenant_id,
+                "request_id": request_id,
+                "model_id": model_id,
+                "reuse_count": reuse_count,
+                "max_reuse": max_reuse,
+            }
+        )
         if exceeded:
             self.quarantine(handle, reason="reuse_limit_exceeded")
 
     # ----- Sanitization -----
-    def sanitize(self, handle: str, *, async_: bool = False, verify: bool = True, double_pass: Optional[bool] = None, samples: Optional[int] = None) -> float:
+    def sanitize(
+        self,
+        handle: str,
+        *,
+        async_: bool = False,
+        verify: bool = True,
+        double_pass: Optional[bool] = None,
+        samples: Optional[int] = None,
+    ) -> float:
         with self._lock:
             buf = self._get(handle)
             buf.status = "sanitizing"
             buf.sanitize_start_ts = time.time()
             stream_id = buf.stream_id
             device = buf.device
-        self.logger.append({"event_type": "sanitize_start", "handle": handle, "tenant_id": buf.tenant_id, "request_id": buf.request_id, "model_id": buf.model_id, "device": device, "stream_id": stream_id})
+        self.logger.append(
+            {
+                "event_type": "sanitize_start",
+                "handle": handle,
+                "tenant_id": buf.tenant_id,
+                "request_id": buf.request_id,
+                "model_id": buf.model_id,
+                "device": device,
+                "stream_id": stream_id,
+            }
+        )
         # Zeroization scheduling
         scheduled_async = self._zeroize_buffer(buf, async_=async_)
         # Optional double pass
@@ -516,7 +594,9 @@ class CacheTracer:
         # Complete synchronously
         return self.wait(handle, verify=verify, samples=samples)
 
-    def wait(self, handle: str, *, verify: bool = True, samples: Optional[int] = None) -> float:
+    def wait(
+        self, handle: str, *, verify: bool = True, samples: Optional[int] = None
+    ) -> float:
         buf = self._get(handle)
         # Sync outside lock (may block)
         if buf.event_obj is not None:
@@ -524,18 +604,45 @@ class CacheTracer:
                 buf.event_obj.synchronize()
             except Exception:
                 pass
-        elif torch is not None and isinstance(buf._tensor, torch.Tensor) and buf._tensor.is_cuda:  # pragma: no cover - GPU sync requires CUDA hardware
-            torch.cuda.synchronize(device=buf._tensor.device)  # pragma: no cover - requires CUDA
+        elif (
+            torch is not None
+            and isinstance(buf._tensor, torch.Tensor)
+            and buf._tensor.is_cuda
+        ):  # pragma: no cover - GPU sync requires CUDA hardware
+            torch.cuda.synchronize(
+                device=buf._tensor.device
+            )  # pragma: no cover - requires CUDA
         with self._lock:
             buf.sanitize_end_ts = time.time()
-            buf.sanitize_duration_ms = float(int(1000 * (buf.sanitize_end_ts - (buf.sanitize_start_ts or buf.sanitize_end_ts))))
+            buf.sanitize_duration_ms = float(
+                int(
+                    1000
+                    * (
+                        buf.sanitize_end_ts
+                        - (buf.sanitize_start_ts or buf.sanitize_end_ts)
+                    )
+                )
+            )
             self._sanitize_durations_ms.append(buf.sanitize_duration_ms)
-            buf.coverage_pct = self._attest_internal(buf, verify=verify, samples=samples)
+            buf.coverage_pct = self._attest_internal(
+                buf, verify=verify, samples=samples
+            )
             buf.status = "sanitized"
             cov = buf.coverage_pct
             dur = buf.sanitize_duration_ms
             samples_list = list(buf.verify_samples)
-        self.logger.append({"event_type": "sanitize_end", "handle": handle, "tenant_id": buf.tenant_id, "request_id": buf.request_id, "model_id": buf.model_id, "coverage_pct": cov, "duration_ms": dur, "verify_samples": samples_list})
+        self.logger.append(
+            {
+                "event_type": "sanitize_end",
+                "handle": handle,
+                "tenant_id": buf.tenant_id,
+                "request_id": buf.request_id,
+                "model_id": buf.model_id,
+                "coverage_pct": cov,
+                "duration_ms": dur,
+                "verify_samples": samples_list,
+            }
+        )
         return cov
 
     def attest_coverage(self, handle: str) -> float:
@@ -548,7 +655,16 @@ class CacheTracer:
             buf = self._get(handle)
             buf.status = "quarantined"
             buf.notes.setdefault("quarantine_reasons", []).append(reason)
-        self.logger.append({"event_type": "quarantine", "handle": handle, "tenant_id": buf.tenant_id, "request_id": buf.request_id, "model_id": buf.model_id, "reason": reason})
+        self.logger.append(
+            {
+                "event_type": "quarantine",
+                "handle": handle,
+                "tenant_id": buf.tenant_id,
+                "request_id": buf.request_id,
+                "model_id": buf.model_id,
+                "reason": reason,
+            }
+        )
 
     def free(self, handle: str) -> None:
         with self._lock:
@@ -559,23 +675,51 @@ class CacheTracer:
                 # Drop lock before quarantine append to avoid nested lock issues
                 pass
         if buf.coverage_pct < self.COVERAGE_THRESHOLD:
-            self.quarantine(handle, reason=f"coverage {buf.coverage_pct:.4f} below threshold")
-            raise FreeWithoutSanitize("Attempt to free buffer without sufficient sanitization")
+            self.quarantine(
+                handle, reason=f"coverage {buf.coverage_pct:.4f} below threshold"
+            )
+            raise FreeWithoutSanitize(
+                "Attempt to free buffer without sufficient sanitization"
+            )
         with self._lock:
             buf.status = "freed"
             buf._tensor = None
             self._freed_total += 1
-        self.logger.append({"event_type": "free", "handle": handle, "tenant_id": buf.tenant_id, "request_id": buf.request_id, "model_id": buf.model_id})
+        self.logger.append(
+            {
+                "event_type": "free",
+                "handle": handle,
+                "tenant_id": buf.tenant_id,
+                "request_id": buf.request_id,
+                "model_id": buf.model_id,
+            }
+        )
 
     # ----- Metrics and export -----
     def get_metrics(self) -> Dict[str, Any]:
         with self._lock:
             total = len(self._buffers)
-            unsanitized = sum(1 for b in self._buffers.values() if b.status not in ("sanitized", "freed", "quarantined"))
-            quarantined = sum(1 for b in self._buffers.values() if b.status == "quarantined")
-            active = sum(1 for b in self._buffers.values() if b.status not in ("freed", "quarantined"))
-            coverages = [b.coverage_pct for b in self._buffers.values() if b.coverage_pct > 0]
-            durations = [b.sanitize_duration_ms for b in self._buffers.values() if b.sanitize_duration_ms is not None]
+            unsanitized = sum(
+                1
+                for b in self._buffers.values()
+                if b.status not in ("sanitized", "freed", "quarantined")
+            )
+            quarantined = sum(
+                1 for b in self._buffers.values() if b.status == "quarantined"
+            )
+            active = sum(
+                1
+                for b in self._buffers.values()
+                if b.status not in ("freed", "quarantined")
+            )
+            coverages = [
+                b.coverage_pct for b in self._buffers.values() if b.coverage_pct > 0
+            ]
+            durations = [
+                b.sanitize_duration_ms
+                for b in self._buffers.values()
+                if b.sanitize_duration_ms is not None
+            ]
             reuse_total = sum(b.reuse_count for b in self._buffers.values())
             freed_total = self._freed_total
             allocations = self._allocations
@@ -613,35 +757,57 @@ class CacheTracer:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         lines: List[str] = []
         # HELP/TYPE headers
-        lines.append("# HELP kv_hygiene_unsanitized_regions Count of buffers not yet sanitized")
+        lines.append(
+            "# HELP kv_hygiene_unsanitized_regions Count of buffers not yet sanitized"
+        )
         lines.append("# TYPE kv_hygiene_unsanitized_regions gauge")
-        lines.append(f"kv_hygiene_unsanitized_regions {int(m['unsanitized_regions_count'])}")
+        lines.append(
+            f"kv_hygiene_unsanitized_regions {int(m['unsanitized_regions_count'])}"
+        )
 
-        lines.append("# HELP kv_hygiene_quarantine_count Count of buffers quarantined due to policy violations")
+        lines.append(
+            "# HELP kv_hygiene_quarantine_count Count of buffers quarantined due to policy violations"
+        )
         lines.append("# TYPE kv_hygiene_quarantine_count gauge")
         lines.append(f"kv_hygiene_quarantine_count {int(m['quarantine_count'])}")
 
-        lines.append("# HELP kv_hygiene_min_coverage_pct Minimum observed sanitization coverage percent across buffers")
+        lines.append(
+            "# HELP kv_hygiene_min_coverage_pct Minimum observed sanitization coverage percent across buffers"
+        )
         lines.append("# TYPE kv_hygiene_min_coverage_pct gauge")
         lines.append(f"kv_hygiene_min_coverage_pct {float(m['min_coverage_pct'])}")
 
-        lines.append("# HELP kv_hygiene_avg_coverage_pct Average sanitization coverage percent across buffers")
+        lines.append(
+            "# HELP kv_hygiene_avg_coverage_pct Average sanitization coverage percent across buffers"
+        )
         lines.append("# TYPE kv_hygiene_avg_coverage_pct gauge")
         lines.append(f"kv_hygiene_avg_coverage_pct {float(m['avg_coverage_pct'])}")
 
-        lines.append("# HELP kv_hygiene_threshold_pct Required minimum sanitization coverage percent")
+        lines.append(
+            "# HELP kv_hygiene_threshold_pct Required minimum sanitization coverage percent"
+        )
         lines.append("# TYPE kv_hygiene_threshold_pct gauge")
         lines.append(f"kv_hygiene_threshold_pct {float(m['threshold_pct'])}")
 
-        lines.append("# HELP kv_hygiene_sanitize_duration_p50_ms P50 sanitize duration in milliseconds")
+        lines.append(
+            "# HELP kv_hygiene_sanitize_duration_p50_ms P50 sanitize duration in milliseconds"
+        )
         lines.append("# TYPE kv_hygiene_sanitize_duration_p50_ms gauge")
-        lines.append(f"kv_hygiene_sanitize_duration_p50_ms {float(m['sanitize_duration_p50_ms'])}")
+        lines.append(
+            f"kv_hygiene_sanitize_duration_p50_ms {float(m['sanitize_duration_p50_ms'])}"
+        )
 
-        lines.append("# HELP kv_hygiene_sanitize_duration_p95_ms P95 sanitize duration in milliseconds")
+        lines.append(
+            "# HELP kv_hygiene_sanitize_duration_p95_ms P95 sanitize duration in milliseconds"
+        )
         lines.append("# TYPE kv_hygiene_sanitize_duration_p95_ms gauge")
-        lines.append(f"kv_hygiene_sanitize_duration_p95_ms {float(m['sanitize_duration_p95_ms'])}")
+        lines.append(
+            f"kv_hygiene_sanitize_duration_p95_ms {float(m['sanitize_duration_p95_ms'])}"
+        )
 
-        lines.append("# HELP kv_hygiene_active_buffers Number of active (not freed/quarantined) buffers")
+        lines.append(
+            "# HELP kv_hygiene_active_buffers Number of active (not freed/quarantined) buffers"
+        )
         lines.append("# TYPE kv_hygiene_active_buffers gauge")
         lines.append(f"kv_hygiene_active_buffers {int(m['active_buffers'])}")
 
@@ -680,7 +846,10 @@ class CacheTracer:
     ) -> Tuple[Any, Optional[int], int, str]:
         """Create a tensor/array per request, returning (obj, ptr, nbytes, dtype_str)."""
         # Torch path
-        if torch is not None and (framework == "torch" or (isinstance(dtype, torch.dtype) or device.startswith("cuda"))):
+        if torch is not None and (
+            framework == "torch"
+            or (isinstance(dtype, torch.dtype) or device.startswith("cuda"))
+        ):
             # Map dtype
             if isinstance(dtype, torch.dtype):
                 tdtype = dtype
@@ -704,12 +873,18 @@ class CacheTracer:
                 }
                 tdtype = dtype_map.get(str(dtype).lower(), torch.float32)
                 dtype_str = str(dtype).lower()
-            dev = torch.device(device if device else ("cuda:0" if torch.cuda.is_available() else "cpu"))
+            dev = torch.device(
+                device if device else ("cuda:0" if torch.cuda.is_available() else "cpu")
+            )
             if dev.type == "cuda":
                 t = torch.zeros(*shape, dtype=tdtype, device=dev)
             else:
                 # For CPU, optionally pin memory if requested
-                t = torch.zeros(*shape, dtype=tdtype, device=dev, pin_memory=pinned) if hasattr(torch, "zeros") else torch.empty(*shape, dtype=tdtype, device=dev)
+                t = (
+                    torch.zeros(*shape, dtype=tdtype, device=dev, pin_memory=pinned)
+                    if hasattr(torch, "zeros")
+                    else torch.empty(*shape, dtype=tdtype, device=dev)
+                )
                 if t.numel() > 0:
                     t.zero_()
             ptr = int(t.data_ptr()) if hasattr(t, "data_ptr") else None
@@ -721,7 +896,11 @@ class CacheTracer:
             raise RuntimeError("NumPy not available to allocate CPU buffers")
         ndt = np.dtype(dtype if isinstance(dtype, str) else "float32")
         arr = np.zeros(shape, dtype=ndt)
-        ptr = int(arr.__array_interface__.get("data", (0,))[0]) if hasattr(arr, "__array_interface__") else None
+        ptr = (
+            int(arr.__array_interface__.get("data", (0,))[0])
+            if hasattr(arr, "__array_interface__")
+            else None
+        )
         nbytes = int(arr.nbytes)
         dtype_str = str(arr.dtype)
         return arr, ptr, nbytes, dtype_str
@@ -738,7 +917,9 @@ class CacheTracer:
             buf.sanitize_duration_ms += result.duration_ms
         return False
 
-    def _attest_internal(self, buf: KVBuffer, *, verify: bool = True, samples: Optional[int] = None) -> float:
+    def _attest_internal(
+        self, buf: KVBuffer, *, verify: bool = True, samples: Optional[int] = None
+    ) -> float:
         # Compute coverage based on scrubbed_bytes, then optionally verify sample values
         if buf.nbytes == 0:
             return 100.0
@@ -752,16 +933,18 @@ class CacheTracer:
             return 0.0
         return coverage
 
-    def _verify_zero(self, buf: KVBuffer, *, samples: int = 8) -> bool:  # legacy shim, now owns sampling so tests can monkeypatch
+    def _verify_zero(
+        self, buf: KVBuffer, *, samples: int = 8
+    ) -> bool:  # legacy shim, now owns sampling so tests can monkeypatch
         t = buf._tensor
         if t is None:
             buf.verify_samples = []
             return True
         # Determine element count
-        if hasattr(t, 'numel'):
+        if hasattr(t, "numel"):
             n = int(t.numel())
-        elif hasattr(t, 'size'):
-            n = int(getattr(t, 'size', 0))
+        elif hasattr(t, "size"):
+            n = int(getattr(t, "size", 0))
         else:
             n = 0
         if n <= 0:
@@ -769,26 +952,30 @@ class CacheTracer:
             return True
         # Record deterministic sample indices (even if we short‑circuit success) so tests observing samples still function
         try:
-            sampler = getattr(sanitizer_mod, '_sample_indices')
+            sampler = getattr(sanitizer_mod, "_sample_indices")
             buf.verify_samples = sampler(n, samples)
         except Exception:  # pragma: no cover - deterministic fallback
             import random as _r
+
             rnd = _r.Random(n * 31 + samples * 17)
             buf.verify_samples = sorted(rnd.sample(range(n), min(samples, n)))
         # For NumPy ndarray path trust zeroization
         try:
-            if 'np' in globals():  # type: ignore
+            if "np" in globals():  # type: ignore
                 import numpy as _np  # type: ignore
+
                 if isinstance(t, _np.ndarray):
                     return True
         except Exception:  # pragma: no cover - fallback
             pass
         # Torch path: actually sample to detect residuals
         try:
-            if hasattr(t, 'view'):
+            if hasattr(t, "view"):
                 flat = t.view(-1)
                 return all(flat[i].item() == 0 for i in buf.verify_samples)
-        except Exception:  # pragma: no cover - conservative failure -> mark not verified
+        except (
+            Exception
+        ):  # pragma: no cover - conservative failure -> mark not verified
             return False
         return True
 

@@ -19,7 +19,13 @@ class ForensicLogger:
     brittle tests that simulate OS faults; integrity is validated via verify_all tests.
     """
 
-    def __init__(self, log_path: Union[str, Path], *, max_bytes: int = 5_000_000, hmac_secret: Optional[bytes] = None) -> None:
+    def __init__(
+        self,
+        log_path: Union[str, Path],
+        *,
+        max_bytes: int = 5_000_000,
+        hmac_secret: Optional[bytes] = None,
+    ) -> None:
         self.path = Path(log_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():  # pragma: no branch
@@ -31,11 +37,17 @@ class ForensicLogger:
         self._lock = threading.Lock()
         self._prev_hash = self._load_last_hash()
         self._max_bytes = max_bytes
-        self._hmac_key = hmac_secret or os.environ.get("FORENSIC_HMAC_SECRET", "").encode("utf-8") or None
+        self._hmac_key = (
+            hmac_secret
+            or os.environ.get("FORENSIC_HMAC_SECRET", "").encode("utf-8")
+            or None
+        )
 
     @staticmethod
     def _canonicalize(record: Mapping[str, Any]) -> str:
-        return json.dumps(record, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        return json.dumps(
+            record, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+        )
 
     def _load_last_hash(self) -> str:
         if not self.path.exists():  # pragma: no branch
@@ -91,13 +103,24 @@ class ForensicLogger:
             record.setdefault("trace_id", str(uuid.uuid4()))
             record["prev_hash"] = self._prev_hash
             canonical = self._canonicalize(record)
-            curr_hash = hashlib.sha256((self._prev_hash + canonical).encode("utf-8")).hexdigest()
+            curr_hash = hashlib.sha256(
+                (self._prev_hash + canonical).encode("utf-8")
+            ).hexdigest()
             record["curr_hash"] = curr_hash
             if self._hmac_key:
-                record["hmac"] = hmac.new(self._hmac_key, (self._prev_hash + canonical).encode("utf-8"), hashlib.sha256).hexdigest()
+                record["hmac"] = hmac.new(
+                    self._hmac_key,
+                    (self._prev_hash + canonical).encode("utf-8"),
+                    hashlib.sha256,
+                ).hexdigest()
             line = json.dumps(record, ensure_ascii=False)
-            if self.path.exists() and self.path.stat().st_size + len(line) + 1 > self._max_bytes:
-                rotated = self.path.with_name(self.path.stem + f"-{int(time.time())}.log")
+            if (
+                self.path.exists()
+                and self.path.stat().st_size + len(line) + 1 > self._max_bytes
+            ):
+                rotated = self.path.with_name(
+                    self.path.stem + f"-{int(time.time())}.log"
+                )
                 self.path.rename(rotated)
                 prev_file_last_hash = self._load_last_hash_from(rotated)
                 self._prev_hash = "GENESIS"
@@ -111,10 +134,16 @@ class ForensicLogger:
                     "prev_file_last_hash": prev_file_last_hash,
                 }
                 canonical_rotate = self._canonicalize(rotate_record)
-                rotate_hash = hashlib.sha256((self._prev_hash + canonical_rotate).encode("utf-8")).hexdigest()
+                rotate_hash = hashlib.sha256(
+                    (self._prev_hash + canonical_rotate).encode("utf-8")
+                ).hexdigest()
                 rotate_record["curr_hash"] = rotate_hash
                 if self._hmac_key:
-                    rotate_record["hmac"] = hmac.new(self._hmac_key, (self._prev_hash + canonical_rotate).encode("utf-8"), hashlib.sha256).hexdigest()
+                    rotate_record["hmac"] = hmac.new(
+                        self._hmac_key,
+                        (self._prev_hash + canonical_rotate).encode("utf-8"),
+                        hashlib.sha256,
+                    ).hexdigest()
                 with self.path.open("a", encoding="utf-8") as f:
                     f.write(json.dumps(rotate_record, ensure_ascii=False) + "\n")
                 try:
@@ -126,10 +155,16 @@ class ForensicLogger:
                 record.pop("hmac", None)
                 record["prev_hash"] = self._prev_hash
                 canonical = self._canonicalize(record)
-                curr_hash = hashlib.sha256((self._prev_hash + canonical).encode("utf-8")).hexdigest()
+                curr_hash = hashlib.sha256(
+                    (self._prev_hash + canonical).encode("utf-8")
+                ).hexdigest()
                 record["curr_hash"] = curr_hash
                 if self._hmac_key:
-                    record["hmac"] = hmac.new(self._hmac_key, (self._prev_hash + canonical).encode("utf-8"), hashlib.sha256).hexdigest()
+                    record["hmac"] = hmac.new(
+                        self._hmac_key,
+                        (self._prev_hash + canonical).encode("utf-8"),
+                        hashlib.sha256,
+                    ).hexdigest()
                 line = json.dumps(record, ensure_ascii=False)
             with self.path.open("a", encoding="utf-8") as f:
                 f.write(line + "\n")
@@ -137,12 +172,18 @@ class ForensicLogger:
             return curr_hash
 
     @staticmethod
-    def verify_chain(path: Union[str, Path], *, hmac_secret: Optional[bytes] = None) -> Dict[str, Any]:
+    def verify_chain(
+        path: Union[str, Path], *, hmac_secret: Optional[bytes] = None
+    ) -> Dict[str, Any]:
         prev = "GENESIS"
         ok = True
         count = 0
         bad_index: Optional[int] = None
-        key = hmac_secret or os.environ.get("FORENSIC_HMAC_SECRET", "").encode("utf-8") or None
+        key = (
+            hmac_secret
+            or os.environ.get("FORENSIC_HMAC_SECRET", "").encode("utf-8")
+            or None
+        )
         with Path(path).open("r", encoding="utf-8") as f:
             for i, line in enumerate(f):
                 if not line.strip():
@@ -152,14 +193,18 @@ class ForensicLogger:
                 tmp = dict(obj)
                 tmp.pop("curr_hash", None)
                 provided_hmac = tmp.pop("hmac", None)
-                canonical = json.dumps(tmp, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+                canonical = json.dumps(
+                    tmp, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+                )
                 calc = hashlib.sha256((prev + canonical).encode("utf-8")).hexdigest()
                 if curr != calc:
                     ok = False
                     bad_index = i
                     break
                 if key is not None and provided_hmac:
-                    calc_hmac = hmac.new(key, (prev + canonical).encode("utf-8"), hashlib.sha256).hexdigest()
+                    calc_hmac = hmac.new(
+                        key, (prev + canonical).encode("utf-8"), hashlib.sha256
+                    ).hexdigest()
                     if provided_hmac != calc_hmac:
                         ok = False
                         bad_index = i
@@ -224,24 +269,34 @@ class ForensicLogger:
             if rotate is None:
                 if i > 0:
                     ok = False
-                    results.append({"file": str(curr.name), "ok": False, "error": "missing rotate record"})
+                    results.append(
+                        {
+                            "file": str(curr.name),
+                            "ok": False,
+                            "error": "missing rotate record",
+                        }
+                    )
                 continue
             expected_name = prev.name
             expected_hash = _last_hash(prev)
             r_prev_file = rotate.get("prev_file")
             r_prev_hash = rotate.get("prev_file_last_hash")
-            if (r_prev_file == curr.name and r_prev_hash == expected_hash):  # benign self reference
+            if (
+                r_prev_file == curr.name and r_prev_hash == expected_hash
+            ):  # benign self reference
                 pass
             elif r_prev_file != expected_name or r_prev_hash != expected_hash:
                 ok = False
-                results.append({
-                    "file": str(curr.name),
-                    "ok": False,
-                    "error": "rotation linkage mismatch",
-                    "expected_prev_file": expected_name,
-                    "expected_prev_last_hash": expected_hash,
-                    "rotate_prev_file": r_prev_file,
-                    "rotate_prev_last_hash": r_prev_hash,
-                })
+                results.append(
+                    {
+                        "file": str(curr.name),
+                        "ok": False,
+                        "error": "rotation linkage mismatch",
+                        "expected_prev_file": expected_name,
+                        "expected_prev_last_hash": expected_hash,
+                        "rotate_prev_file": r_prev_file,
+                        "rotate_prev_last_hash": r_prev_hash,
+                    }
+                )
 
         return {"ok": ok, "files": results}

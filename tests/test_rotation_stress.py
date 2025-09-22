@@ -20,5 +20,9 @@ def test_forensic_logger_rotation_stress(tmp_path):
     result = ForensicLogger.verify_all(log)
     # result may mark ok False if benign self-reference quirk encountered; ensure no hard failures other than linkage mismatch
     files = result["files"]
-    hard_errors = [f for f in files if f.get("error") not in (None, "rotation linkage mismatch") and not f.get("ok")]
+    hard_errors = [
+        f
+        for f in files
+        if f.get("error") not in (None, "rotation linkage mismatch") and not f.get("ok")
+    ]
     assert not hard_errors, f"Unexpected hard errors: {hard_errors}\nResult: {result}"

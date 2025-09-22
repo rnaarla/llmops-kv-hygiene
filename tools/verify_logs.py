@@ -26,7 +26,13 @@ def verify_all_and_write(log_path: Path, out_path: Optional[Path] = None) -> dic
     return res
 
 
-def prune_rotated(log_path: Path, *, retention_days: Optional[int] = None, max_rotated: Optional[int] = None, archive_dir: Optional[Path] = None) -> List[str]:
+def prune_rotated(
+    log_path: Path,
+    *,
+    retention_days: Optional[int] = None,
+    max_rotated: Optional[int] = None,
+    archive_dir: Optional[Path] = None,
+) -> List[str]:
     """Prune rotated logs based on age or count. Returns list of removed file names.
 
     Rotated files are named '<stem>-<ts>.log'. Active file '<stem>.log' is never removed.
@@ -74,12 +80,36 @@ def prune_rotated(log_path: Path, *, retention_days: Optional[int] = None, max_r
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Verify forensic logs integrity and enforce retention")
-    parser.add_argument("--log-dir", default=os.environ.get("LOG_DIR", "/var/forensics"))
-    parser.add_argument("--log-file", default=os.environ.get("LOG_FILE", "kv_cache.log"))
-    parser.add_argument("--out", default=os.environ.get("VERDICT_OUT", "verification.json"))
-    parser.add_argument("--retention-days", type=int, default=lambda: int(os.environ.get("RETENTION_DAYS", "0")) if os.environ.get("RETENTION_DAYS") else None)
-    parser.add_argument("--max-rotated", type=int, default=lambda: int(os.environ.get("MAX_ROTATED", "0")) if os.environ.get("MAX_ROTATED") else None)
+    parser = argparse.ArgumentParser(
+        description="Verify forensic logs integrity and enforce retention"
+    )
+    parser.add_argument(
+        "--log-dir", default=os.environ.get("LOG_DIR", "/var/forensics")
+    )
+    parser.add_argument(
+        "--log-file", default=os.environ.get("LOG_FILE", "kv_cache.log")
+    )
+    parser.add_argument(
+        "--out", default=os.environ.get("VERDICT_OUT", "verification.json")
+    )
+    parser.add_argument(
+        "--retention-days",
+        type=int,
+        default=lambda: (
+            int(os.environ.get("RETENTION_DAYS", "0"))
+            if os.environ.get("RETENTION_DAYS")
+            else None
+        ),
+    )
+    parser.add_argument(
+        "--max-rotated",
+        type=int,
+        default=lambda: (
+            int(os.environ.get("MAX_ROTATED", "0"))
+            if os.environ.get("MAX_ROTATED")
+            else None
+        ),
+    )
     parser.add_argument("--archive-dir", default=os.environ.get("ARCHIVE_DIR"))
     args = parser.parse_args(argv)
 
@@ -104,7 +134,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     ok_before = bool(res_before.get("ok", False))
 
     # Enforce retention if configured
-    removed = prune_rotated(base, retention_days=retention_days, max_rotated=max_rotated, archive_dir=archive_dir)
+    removed = prune_rotated(
+        base,
+        retention_days=retention_days,
+        max_rotated=max_rotated,
+        archive_dir=archive_dir,
+    )
     if removed:
         print(json.dumps({"schema": 1, "ts": time.time(), "removed": removed}))
 

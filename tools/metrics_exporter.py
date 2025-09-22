@@ -14,10 +14,14 @@ METRICS_FILE = os.environ.get("METRICS_FILE", "forensics/metrics.prom")
 PORT = int(os.environ.get("METRICS_PORT", "8000"))
 BIND = os.environ.get("METRICS_BIND", "0.0.0.0")
 
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         # quiet
-        sys.stderr.write("%s - - [%s] %s\n" % (self.address_string(), self.log_date_time_string(), format%args))
+        sys.stderr.write(
+            "%s - - [%s] %s\n"
+            % (self.address_string(), self.log_date_time_string(), format % args)
+        )
 
     def do_GET(self):
         if self.path != "/metrics":
@@ -36,7 +40,10 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+
 if __name__ == "__main__":  # pragma: no cover - integration path
     httpd = HTTPServer((BIND, PORT), Handler)
-    print(f"serving metrics from {METRICS_FILE} on {BIND}:{PORT} at /metrics", flush=True)
+    print(
+        f"serving metrics from {METRICS_FILE} on {BIND}:{PORT} at /metrics", flush=True
+    )
     httpd.serve_forever()

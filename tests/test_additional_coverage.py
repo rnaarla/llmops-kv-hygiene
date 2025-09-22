@@ -19,7 +19,15 @@ def test_verify_logs_retention_archive(tmp_path, monkeypatch):
     tracer.logger._max_bytes = 500
     # Create several rotations
     for i in range(40):
-        h = tracer.allocate(tenant_id="t", request_id="r", model_id=f"m{i}", shape=(4,), dtype="float32", device="cpu", framework="numpy")
+        h = tracer.allocate(
+            tenant_id="t",
+            request_id="r",
+            model_id=f"m{i}",
+            shape=(4,),
+            dtype="float32",
+            device="cpu",
+            framework="numpy",
+        )
         tracer.mark_in_use(h)
         tracer.sanitize(h, async_=False, verify=True)
         tracer.free(h)
@@ -42,7 +50,9 @@ def test_verify_logs_retention_archive(tmp_path, monkeypatch):
         os.utime(mal_dest, (time.time() - 5 * 86400, time.time() - 5 * 86400))
     archive_dir = tmp_path / "arch"
     # Age+count pruning with archive (should remove old & malformed)
-    removed = prune_rotated(log_path, retention_days=1, max_rotated=1, archive_dir=archive_dir)
+    removed = prune_rotated(
+        log_path, retention_days=1, max_rotated=1, archive_dir=archive_dir
+    )
     assert removed, "Expected some rotated files to be archived or removed"
     assert archive_dir.exists()
     res_after = verify_all_and_write(log_path)
@@ -67,15 +77,23 @@ def test_eviction_checker_all_failures(tmp_path):
     }
     metrics_path = tmp_path / "metrics.json"
     metrics_path.write_text(json.dumps(metrics))
-    rc = eviction_main([
-        str(metrics_path),
-        "--coverage-min", "95.0",
-        "--unsanitized-max", "0",
-        "--quarantine-max", "0",
-        "--reuse-rate-max", "0.1",
-        "--sanitize-p95-ms-max", "100.0",
-        "--out", str(tmp_path / "verdict.json"),
-    ])
+    rc = eviction_main(
+        [
+            str(metrics_path),
+            "--coverage-min",
+            "95.0",
+            "--unsanitized-max",
+            "0",
+            "--quarantine-max",
+            "0",
+            "--reuse-rate-max",
+            "0.1",
+            "--sanitize-p95-ms-max",
+            "100.0",
+            "--out",
+            str(tmp_path / "verdict.json"),
+        ]
+    )
     assert rc == 2
     verdict = json.loads((tmp_path / "verdict.json").read_text())
     assert len(verdict["failures"]) >= 5
@@ -84,7 +102,15 @@ def test_eviction_checker_all_failures(tmp_path):
 def test_metrics_exporter_content_length_and_empty(tmp_path, monkeypatch):
     # Prepare metrics
     tracer = CacheTracer(log_path=str(tmp_path / "kv_cache.log"))
-    h = tracer.allocate(tenant_id="t", request_id="r", model_id="m", shape=(4,), dtype="float32", device="cpu", framework="numpy")
+    h = tracer.allocate(
+        tenant_id="t",
+        request_id="r",
+        model_id="m",
+        shape=(4,),
+        dtype="float32",
+        device="cpu",
+        framework="numpy",
+    )
     tracer.mark_in_use(h)
     tracer.sanitize(h, async_=False, verify=True)
     tracer.free(h)
@@ -94,7 +120,11 @@ def test_metrics_exporter_content_length_and_empty(tmp_path, monkeypatch):
     port = 8255
     monkeypatch.setenv("METRICS_PORT", str(port))
     monkeypatch.setenv("METRICS_BIND", "127.0.0.1")
-    proc = subprocess.Popen([sys.executable, "tools/metrics_exporter.py"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.Popen(
+        [sys.executable, "tools/metrics_exporter.py"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
     try:
         time.sleep(0.25)
         conn = HTTPConnection("127.0.0.1", port)
@@ -124,7 +154,9 @@ def test_activation_logger_anomaly_variants(tmp_path):
     logger = ActivationLogger(out_path=str(tmp_path / "acts.jsonl"), z_threshold=1.0)
     # Establish baseline
     for _ in range(10):
-        logger.observe("L1", (0.0, 0.0, 0.0, 4), rate_limit_hz=None)  # no rate limit so all logged
+        logger.observe(
+            "L1", (0.0, 0.0, 0.0, 4), rate_limit_hz=None
+        )  # no rate limit so all logged
     # z-score anomaly: sudden mean shift
     logger.observe("L1", (50.0, 0.0, 50.0, 4), rate_limit_hz=None)
     # max_val anomaly with zero std baseline (new layer)
@@ -146,7 +178,15 @@ def test_forensic_rotation_mismatch_branch(tmp_path):
     tracer = CacheTracer(log_path=str(log_path))
     tracer.logger._max_bytes = 400
     for i in range(35):
-        h = tracer.allocate(tenant_id="t", request_id="r", model_id=f"m{i}", shape=(3,), dtype="float32", device="cpu", framework="numpy")
+        h = tracer.allocate(
+            tenant_id="t",
+            request_id="r",
+            model_id=f"m{i}",
+            shape=(3,),
+            dtype="float32",
+            device="cpu",
+            framework="numpy",
+        )
         tracer.mark_in_use(h)
         tracer.sanitize(h, async_=False, verify=True)
         tracer.free(h)
@@ -171,7 +211,15 @@ def test_multiple_buffer_metrics_edge(tmp_path):
     tracer = CacheTracer(log_path=str(tmp_path / "kv_cache.log"))
     handles = []
     for i in range(5):
-        h = tracer.allocate(tenant_id="t", request_id="r", model_id=f"m{i}", shape=(4,), dtype="float32", device="cpu", framework="numpy")
+        h = tracer.allocate(
+            tenant_id="t",
+            request_id="r",
+            model_id=f"m{i}",
+            shape=(4,),
+            dtype="float32",
+            device="cpu",
+            framework="numpy",
+        )
         tracer.mark_in_use(h)
         if i % 2 == 0:
             tracer.sanitize(h, async_=False, verify=True)

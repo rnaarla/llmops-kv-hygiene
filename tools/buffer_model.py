@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 import time
 
+
 @dataclass
 class KVBuffer:
     handle: str
@@ -16,7 +17,9 @@ class KVBuffer:
     nbytes: int
     created_ts: float = field(default_factory=time.time)
     stream_id: Optional[str] = None
-    status: str = "allocated"  # allocated|bound|in_use|sanitizing|sanitized|freed|quarantined
+    status: str = (
+        "allocated"  # allocated|bound|in_use|sanitizing|sanitized|freed|quarantined
+    )
     scrubbed_bytes: int = 0
     sanitize_start_ts: Optional[float] = None
     sanitize_end_ts: Optional[float] = None
