@@ -246,37 +246,64 @@ Contributing
 
 See `CONTRIBUTING.md`. For security issues, see `SECURITY.md`.
 
+## Hygiene Workflow & Quality Gates
+
+The project enforces a layered hygiene pipeline so regressions are caught as early (and cheaply) as possible:
+
+1. Local (developer workstation)
+
+- `pre-commit` hooks: `ruff check --fix`, `ruff format`, and a fast `pytest -q -k "sanitization or isolation"` smoke slice.
+- Goal: <10s feedback; reject style / obvious hygiene logic regressions before commit.
+
+1. CI Test & Coverage Gate
+
+- Full `pytest` run with `pytest --cov --cov-report=term-missing --cov-fail-under=90` in GitHub Actions and Jenkins.
+- Fails the pipeline if aggregate line+branch coverage dips below 90%.
+
+1. Hygiene Metrics Gate (optional separate job/stage)
+
+- Runs `python tools/eviction_checker.py forensics/coverage.json --coverage-min 99.9 --unsanitized-max 0 --quarantine-max 0` against freshly exported metrics.
+- Ensures real runtime hygiene (sanitization coverage per buffer) matches policy; lets per‑buffer attestation stay stricter (99.9%) than code coverage (90%).
+
+1. Forensic Integrity Gate (periodic / cron)
+
+- `python -m tools.verify_logs --log-dir forensics --log-file kv_cache.log --retention-days 30 --max-rotated 20`.
+- Verifies hash chain + rotation linkage and prunes old rotated logs (active file never pruned) providing auditable integrity evidence.
+
+Escalation path: failures at layers 1–2 block merges; layer 3 blocks deploy promotion; layer 4 raises operational alerts (not a merge blocker) but produces compliance evidence.
+
 ## Coverage policy
 
-Current enforced line+branch coverage threshold: **87%**.
+Current enforced line+branch coverage threshold: **90%**.
 
 ### Rationale
 
-- Plateau reached after exhaustive high-value tests; remaining uncovered lines are predominantly defensive / environment-specific (GPU, IO fallbacks, rare error paths) inside a monolithic `cache_tracer` module.
-- Further synthetic tests would add maintenance risk without materially increasing assurance.
+- Threshold raised from 87% → 90% after refactoring and targeted tests created stable headroom (observed 90.2–90.4% across multiple runs).
+- Remaining uncovered lines are predominantly: (a) CUDA / hardware‑gated branches, (b) rare IO or corruption error handling, (c) defensive guards in `sanitizer` and log verification utilities.
+- Further synthetic tests to chase the final ~10% would risk brittle mocks around hardware / filesystem edge cases without increasing real assurance.
 
-### Improvement path
+### Improvement path (organic, low risk)
 
-1. Decompose `tools/cache_tracer.py` into smaller modules (`buffer_model`, `sanitizer`, `policies`, `metrics_utils`).
-2. Isolate GPU-only logic in a dedicated module (optionally excluded when CUDA unavailable).
-3. Introduce focused unit tests per extracted module to raise organic coverage without artificial scenarios.
+1. Isolate CUDA‑specific logic into a dedicated module to allow conditional import and focused tests when GPUs are present.
+2. Add structured property / fuzz tests for sanitizer verification sampling to exercise additional statistical paths naturally.
+3. Incrementally enable `mypy --strict` (module allow‑list expansion) to surface type drift early.
+4. Consider raise to 92% only after: (a) CUDA module split, (b) zero flakiness over 30 consecutive CI runs, (c) coverage floor >92.3% p95.
 
-### Phase 3 Decomposition Status (Sanitizer Extraction)
+### Current decomposition status
 
-- Extracted modules: `buffer_model.py`, `metrics_utils.py`, `policies.py`, `sanitizer.py`, `forensic_logger.py`.
-- Added targeted tests: `test_metrics_utils.py`, `test_policies.py`, and `test_sanitizer_module.py` (covers zeroization success, failure injection, and torch CPU path when available).
-- Refactored verification seam: `_verify_zero` restored as monkeypatch target while sanitizer centralizes zeroization logic.
-- Zero-length buffers now treated as 100% coverage (edge-case clarification) and negative `max_reuse` interpreted as no limit.
-- Future raise of the coverage gate will occur only after sustained ≥90% true coverage post-refactor and validation that remaining uncovered lines are legitimately defensive or hardware-gated.
+- Extracted modules: `buffer_model.py`, `metrics_utils.py`, `policies.py`, `sanitizer.py`, `forensic_logger.py` (reduces monolith complexity in `cache_tracer`).
+- Sanitizer centralizes zeroization logic (NumPy / simulated CUDA) with `_verify_zero` seam for targeted test instrumentation.
+- Edge‑case clarifications codified: zero‑length buffers = 100% coverage; negative `max_reuse` => unlimited; TTL ≤ 0 => immediate violation.
 
 ### Next planned steps
 
-1. Add mypy typing and incremental strictness.
-2. Evaluate raising coverage threshold (target 90%) after verifying module-level stability.
-3. Optional: separate CUDA-specific sanitizer path into its own module for clearer exclusion logic when CUDA unavailable.
+1. Introduce mypy incremental strict gates (warn → fail) in CI.
+2. Optional GPU CI lane to execute real CUDA sanitize/wait paths when hardware is available.
+3. Evaluate raising per‑buffer attestation threshold (currently 99.9%) if double‑pass becomes default policy.
 
 ### Guidance
 
-- Do not lower coverage below 87% without explicit risk acceptance.
-- When adding new modules, require near-100% coverage on those modules unless they contain intentional defensive or platform-specific branches.
+- Do not lower coverage below 90% without explicit risk acceptance sign‑off.
+- New modules should target ≥95% coverage (≥99% if pure logic, excluding hardware / randomness branches).
+- Keep attestation (runtime coverage per buffer) threshold distinct and higher than code coverage to maintain defense in depth.
 
