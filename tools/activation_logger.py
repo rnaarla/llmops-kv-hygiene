@@ -114,7 +114,13 @@ class ActivationLogger:
                     int(tensor[3]),
                 )
             except Exception as e:  # pragma: no cover - defensive unreachable with current tests
-                raise TypeError("Unsupported tensor type for ActivationLogger.observe") from e
+                import logging
+                logging.debug(
+                    "ActivationLogger.observe: failed tuple-like stats extraction", exc_info=True
+                )
+                raise TypeError(
+                    "Unsupported tensor type for ActivationLogger.observe"
+                ) from e
 
         key = layer
         with self._lock:

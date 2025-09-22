@@ -116,7 +116,8 @@ class CacheTracer:
         def _env_int(key: str, default: int) -> int:
             try:
                 return int(os.environ.get(key, default))
-            except Exception:
+            except Exception:  # pragma: no cover - env parse fallback
+                logging.debug("_env_int: failed to parse int env %s", key, exc_info=True)
                 return default
 
         def _env_float_opt(key: str, default: float | None) -> float | None:
@@ -125,7 +126,8 @@ class CacheTracer:
                 return default
             try:
                 return float(v)
-            except Exception:
+            except Exception:  # pragma: no cover - env parse fallback
+                logging.debug("_env_float_opt: failed to parse float env %s", key, exc_info=True)
                 return default
 
         self.COVERAGE_THRESHOLD = float(os.environ.get("KV_COVERAGE_THRESHOLD", coverage_threshold))
@@ -660,12 +662,14 @@ class CacheTracer:
         if hasattr(t, "numel"):
             try:
                 return int(t.numel())
-            except Exception:  # pragma: no cover
+            except Exception:  # pragma: no cover - numel retrieval
+                logging.debug("_buffer_numel: failed numel()", exc_info=True)
                 return 0
         if hasattr(t, "size"):
             try:
                 return int(getattr(t, "size", 0))
-            except Exception:  # pragma: no cover
+            except Exception:  # pragma: no cover - size attr access
+                logging.debug("_buffer_numel: failed size attribute", exc_info=True)
                 return 0
         return 0
 
@@ -686,7 +690,7 @@ class CacheTracer:
             import numpy as _np
             return isinstance(t, _np.ndarray)
         except Exception:  # pragma: no cover - fallback  # noqa: BLE001
-            logging.debug("NumPy verification fast-path failed", exc_info=True)
+            logging.debug("_is_numpy_array: NumPy fast-path failed", exc_info=True)
             return False
 
     @staticmethod
@@ -702,6 +706,7 @@ class CacheTracer:
         except Exception:  # pragma: no cover - conservative failure
             # Mark not verified if any unexpected error during sampling
             # noqa: BLE001
+            logging.debug("_samples_zero: sampling failed", exc_info=True)
             return False
         # If we cannot introspect, assume success (opaque type already zeroized)
         return True

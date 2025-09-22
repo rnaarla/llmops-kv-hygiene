@@ -49,8 +49,10 @@ def prune_rotated(
             try:
                 ts_part = p.stem.split("-")[-1]
                 ts = int(ts_part)
-            except Exception:
-                # If name doesn't parse as timestamp, fall back to mtime
+            except Exception:  # pragma: no cover - malformed rotated filename
+                # If name doesn't parse as timestamp, fall back to mtime and log debug
+                import logging
+                logging.debug("prune_rotated: filename timestamp parse failed", exc_info=True)
                 ts = int(p.stat().st_mtime)
             if ts < cutoff:
                 if archive_dir:

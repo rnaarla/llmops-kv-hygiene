@@ -35,7 +35,7 @@ class ForensicLogger:
             try:
                 os.chmod(self.path, 0o600)
             except Exception:  # pragma: no cover - permission hardening fallback
-                logging.debug("chmod hardening failed", exc_info=True)
+                logging.debug("ForensicLogger.__init__: chmod hardening failed", exc_info=True)
         self._lock = threading.Lock()
         self._prev_hash = self._load_last_hash()
         self._max_bytes = max_bytes
@@ -65,10 +65,14 @@ class ForensicLogger:
                         obj = json.loads(line)
                         return obj.get("curr_hash", "GENESIS")
                     except Exception:  # pragma: no cover - ignores malformed tail line
-                        logging.debug("malformed tail line during last hash scan", exc_info=True)
+                        logging.debug(
+                            "ForensicLogger._load_last_hash: malformed tail line", exc_info=True
+                        )
                         continue
         except Exception:  # pragma: no cover - IO failure fallback
-            logging.debug("IO failure reading last hash", exc_info=True)
+            logging.debug(
+                "ForensicLogger._load_last_hash: IO failure reading last hash", exc_info=True
+            )
         return "GENESIS"
 
     def _load_last_hash_from(self, path: str | Path) -> str:
@@ -90,10 +94,15 @@ class ForensicLogger:
                         obj = json.loads(line)
                         return obj.get("curr_hash", "GENESIS")
                     except Exception:  # pragma: no cover
-                        logging.debug("malformed tail line (specific file)", exc_info=True)
+                        logging.debug(
+                            "ForensicLogger._load_last_hash_from: malformed tail line",
+                            exc_info=True,
+                        )
                         continue
         except Exception:  # pragma: no cover - IO failure fallback
-            logging.debug("IO failure reading specific file last hash", exc_info=True)
+            logging.debug(
+                "ForensicLogger._load_last_hash_from: IO failure reading file", exc_info=True
+            )
         return "GENESIS"
 
     def append(self, record: MutableMapping[str, Any]) -> str:
@@ -142,7 +151,9 @@ class ForensicLogger:
                 try:
                     os.chmod(self.path, 0o600)
                 except Exception:  # pragma: no cover
-                    logging.debug("chmod post-rotation failed", exc_info=True)
+                    logging.debug(
+                        "ForensicLogger.append: chmod post-rotation failed", exc_info=True
+                    )
                 self._prev_hash = rotate_hash
                 record.pop("curr_hash", None)
                 record.pop("hmac", None)

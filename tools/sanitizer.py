@@ -56,7 +56,9 @@ def zeroize_cpu(buf: Any) -> int:
     ):
         try:
             nbytes = int(arr.numel() * arr.element_size())
-        except Exception:  # pragma: no cover - defensive
+        except Exception:  # pragma: no cover - defensive size calc
+            import logging
+            logging.debug("zeroize_cpu: failed to compute tensor size", exc_info=True)
             nbytes = 0
         try:
             if hasattr(arr, "zero_"):
@@ -65,7 +67,9 @@ def zeroize_cpu(buf: Any) -> int:
                 # Fallback iterate (slow, but safe)
                 for _i in range(arr.numel()):
                     arr.view(-1)[_i] = 0
-        except Exception:  # pragma: no cover - defensive
+        except Exception:  # pragma: no cover - defensive zeroing
+            import logging
+            logging.debug("zeroize_cpu: tensor zeroing failed", exc_info=True)
             return 0
         return nbytes
     # NumPy ndarray
@@ -73,7 +77,9 @@ def zeroize_cpu(buf: Any) -> int:
         nbytes = int(arr.nbytes)
         try:
             arr.fill(0)
-        except Exception:  # pragma: no cover
+        except Exception:  # pragma: no cover - numpy fill
+            import logging
+            logging.debug("zeroize_cpu: numpy fill failed", exc_info=True)
             return 0
         return nbytes
     # Unsupported type or missing dependency
