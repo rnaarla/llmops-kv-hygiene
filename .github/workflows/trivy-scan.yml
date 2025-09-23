@@ -4,42 +4,35 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: '0 0 * * 0'  # weekly Sunday 00:00 UTC
+    - cron: '0 0 * * 0'
   workflow_dispatch:
 
 permissions:
   contents: read
-  security-events: write  # needed for SARIF upload
+  security-events: write
 
 jobs:
   scan:
-    name: Trivy ${{ matrix.target }} scan
-    runs-on: ubuntu-latest
     strategy:
       matrix:
         target: [image, fs]
+    runs-on: ubuntu-latest
     env:
       IMAGE_REPO: ghcr.io/${{ github.repository }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Derive short SHA
         id: sha
         run: echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-
       - name: Derive image tag
         id: meta
         run: |
           echo "tag=cpu-${{ steps.sha.outputs.short_sha }}" >> "$GITHUB_OUTPUT"
           echo "image=${IMAGE_REPO}:cpu-${{ steps.sha.outputs.short_sha }}" >> "$GITHUB_OUTPUT"
-
-      # Optionally pull image (in case build workflow already pushed it); ignore errors if not present.
       - name: Attempt docker pull (best-effort)
         if: matrix.target == 'image'
         run: |
-          docker pull "${{ steps.meta.outputs.image }}" || echo "Image not yet published; scan will likely fail unless image exists."
-
+          docker pull "${{ steps.meta.outputs.image }}" || echo "Image not yet published; continuing with scan attempt."
       - name: Run Trivy (table report)
         uses: aquasecurity/trivy-action@v0.33.1
         with:
@@ -49,19 +42,17 @@ jobs:
           scanners: vuln,secret
           severity: CRITICAL,HIGH
           ignore-unfixed: true
-          exit-code: '0'       # never fail pipeline on vulnerability presence; gating handled elsewhere
+          exit-code: '0'
           cache: true
           skip-setup-trivy: false
           output: trivy-${{ matrix.target }}-results.txt
           timeout: 10m
-
       - name: Upload table results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: trivy-${{ matrix.target }}-results
           path: trivy-${{ matrix.target }}-results.txt
-
       - name: Run Trivy (SARIF report)
         uses: aquasecurity/trivy-action@v0.33.1
         with:
@@ -76,22 +67,11 @@ jobs:
           skip-setup-trivy: false
           output: trivy-${{ matrix.target }}-results.sarif
           timeout: 10m
-
-      - name: Upload SARIF to GitHub Security tab
-        if: always()
+      - name: Upload SARIF
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-${{ matrix.target }}-results.sarif
-
-      # Uncomment this to enforce fail on HIGH/CRITICAL
-      # - name: Fail on critical/high (future policy)
-      #   if: always() && matrix.target == 'image'
-      #   run: |
-      #     if grep -q 'CRITICAL' trivy-image-results.txt || grep -q 'HIGH' trivy-image-results.txt; then
-      #       echo "Critical/High vulnerabilities detected. (Policy gating currently disabled)";
-      #       exit 1;
-      #     fi
-
+        continue-on-error: true
   notify:
     runs-on: ubuntu-latest
     needs: scan
@@ -100,7 +80,6 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: trivy-reports
-
       - name: Send Slack Notification
         if: always() && env.SLACK_WEBHOOK != ''
         env:
@@ -110,7 +89,6 @@ jobs:
           curl -X POST -H 'Content-type: application/json' \
             --data "{\"text\":\"Trivy scan completed. Reports: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\"}" \
             "$SLACK_WEBHOOK" || echo "Slack notification failed or not configured"
-
       - name: Send Email Notification
         if: always() && env.MAIL_USERNAME != '' && env.MAIL_PASSWORD != ''
         uses: dawidd6/action-send-mail@v3

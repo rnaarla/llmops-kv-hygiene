@@ -19,19 +19,18 @@ permissions:
 
 jobs:
   generate-matrix:
-    name: Generate test matrix
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.mk.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
       - id: mk
-        name: Build matrix JSON
         run: |
           python - <<'PY'
           import json, os
           path = 'ci_cd/test_matrix.json'
-          with open(path,'r',encoding='utf-8') as f: cfg = json.load(f)
+          with open(path,'r',encoding='utf-8') as f:
+              cfg = json.load(f)
           matrix = {
             'os': cfg.get('platform', ['ubuntu-latest']),
             'python-version': cfg.get('python', ['3.11'])
@@ -41,7 +40,6 @@ jobs:
           PY
 
   lint:
-    name: Lint (ruff/black/mypy)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -78,10 +76,8 @@ jobs:
           mypy --version || true
 
   test:
-    name: Unit tests and hygiene gates
     needs: [lint, generate-matrix]
     strategy:
-      fail-fast: false
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     steps:
@@ -101,7 +97,6 @@ jobs:
             --cov=tools --cov-report=term-missing \
             --cov-report=xml:reports/coverage.xml \
             --cov-report=json:reports/coverage.json \
-            --junitxml=reports/junit.xml \
             --cov-fail-under=90
       - uses: actions/upload-artifact@v4
         with:
@@ -153,15 +148,14 @@ jobs:
             forensics/**
 
   coverage-aggregate:
-    name: Aggregate coverage
-    runs-on: ubuntu-latest
     needs: test
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: coverage_artifacts
-          pattern: coverage-raw-*
+          pattern: coverage-*
           merge-multiple: true
       - name: Combine coverage
         run: |
@@ -181,32 +175,25 @@ jobs:
 
   docker-images:
     name: Build and push Docker images (CPU + CUDA)
-    runs-on: ubuntu-latest
     needs: coverage-aggregate
     if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
       - id: prep
         run: |
-          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          echo "repo=ghcr.io/${REPO_LOWER}" >> $GITHUB_OUTPUT
-          SHA_TAG=${GITHUB_SHA::12}
-          echo "sha=${SHA_TAG}" >> $GITHUB_OUTPUT
-
+          echo "repo=ghcr.io/${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+          echo "sha=${GITHUB_SHA::12}" >> $GITHUB_OUTPUT
       - name: Build and push CPU image
         uses: docker/build-push-action@v6
         with:
@@ -217,9 +204,6 @@ jobs:
           tags: |
             ${{ steps.prep.outputs.repo }}:cpu-latest
             ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
       - name: Build and push CUDA image
         uses: docker/build-push-action@v6
         with:
@@ -234,8 +218,6 @@ jobs:
             TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      # --- Updated Trivy Step ---
       - name: Trivy scan (CPU)
         uses: aquasecurity/trivy-action@v0.33.1
         with:
@@ -245,11 +227,8 @@ jobs:
           severity: CRITICAL,HIGH
           vuln-type: os,library
           ignore-unfixed: true
-          exit-code: '0'              # report only, don't fail
-          skip-setup-trivy: false      # ensure setup is done
-          cache: true                  # enable caching of trivy db etc.
-          version: 'latest'            # or specific Trivy version
-        # No need continue-on-error if exit-code is 0
+          exit-code: '0'
+        continue-on-error: true
       - name: Trivy scan (CUDA)
         uses: aquasecurity/trivy-action@v0.33.1
         with:
@@ -260,29 +239,41 @@ jobs:
           vuln-type: os,library
           ignore-unfixed: true
           exit-code: '0'
-          skip-setup-trivy: false
-          cache: true
-          version: 'latest'
-
-      - name: Upload Trivy SARIF results
+        continue-on-error: true
+      - name: Upload Trivy results (CPU)
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-cpu.sarif
-      - uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
+      - name: Upload Trivy results (CUDA)
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-cuda.sarif
-
-      # SBOM + Grype validation
-      - uses: anchore/sbom-action@v0.17.2
+        continue-on-error: true
+      - name: Generate SBOM (Syft CPU)
+        uses: anchore/sbom-action@v0.17.2
         with:
           image: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
           output-file: sbom-cpu-${{ steps.prep.outputs.sha }}.spdx.json
           format: spdx-json
-      - uses: anchore/sbom-action@v0.17.2
+      - name: Generate SBOM (Syft CUDA)
+        uses: anchore/sbom-action@v0.17.2
         with:
           image: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
           output-file: sbom-cuda-${{ steps.prep.outputs.sha }}.spdx.json
           format: spdx-json
+      - name: Generate SBOM (Syft CPU, CycloneDX)
+        uses: anchore/sbom-action@v0.17.2
+        with:
+          image: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
+          output-file: sbom-cpu-${{ steps.prep.outputs.sha }}.cyclonedx.json
+          format: cyclonedx-json
+      - name: Generate SBOM (Syft CUDA, CycloneDX)
+        uses: anchore/sbom-action@v0.17.2
+        with:
+          image: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
+          output-file: sbom-cuda-${{ steps.prep.outputs.sha }}.cyclonedx.json
+          format: cyclonedx-json
       - name: Cross-validate SBOM with Grype (CPU)
         run: |
           docker run --rm -v $PWD:/scan anchore/grype:v0.80.0 \
@@ -297,13 +288,13 @@ jobs:
             --fail-on high --output json > grype-cuda.json
           cat grype-cuda.json
         continue-on-error: true
-
-      - name: Upload SBOM and Grype artifacts
+      - name: Upload SBOM artifacts
         uses: actions/upload-artifact@v4
         with:
           name: sbom
           path: |
             sbom-*.spdx.json
+            sbom-*.cyclonedx.json
             grype-*.json
 
   docker-scan-pr:
@@ -312,19 +303,15 @@ jobs:
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
-
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
       - id: prep
         run: |
           REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
           echo "repo=ghcr.io/${REPO_LOWER}" >> $GITHUB_OUTPUT
           echo "sha=${GITHUB_SHA::12}" >> $GITHUB_OUTPUT
-
       - name: Build CPU image (no push)
         uses: docker/build-push-action@v6
         with:
@@ -334,7 +321,6 @@ jobs:
           push: false
           tags: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
           cache-from: type=gha
-
       - name: Build CUDA image (no push)
         uses: docker/build-push-action@v6
         with:
@@ -346,7 +332,6 @@ jobs:
           build-args: |
             TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121
           cache-from: type=gha
-
       - name: Trivy scan (CPU) [PR]
         uses: aquasecurity/trivy-action@v0.33.1
         with:
@@ -357,10 +342,7 @@ jobs:
           vuln-type: os,library
           ignore-unfixed: true
           exit-code: '0'
-          skip-setup-trivy: false
-          cache: true
-          version: 'latest'
-
+        continue-on-error: true
       - name: Trivy scan (CUDA) [PR]
         uses: aquasecurity/trivy-action@v0.33.1
         with:
@@ -371,24 +353,25 @@ jobs:
           vuln-type: os,library
           ignore-unfixed: true
           exit-code: '0'
-          skip-setup-trivy: false
-          cache: true
-          version: 'latest'
-
-      - name: Upload Trivy SARIF results (PR)
+        continue-on-error: true
+      - name: Upload Trivy SARIF results (PR CPU)
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-cpu-pr.sarif
-      - uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
+      - name: Upload Trivy SARIF results (PR CUDA)
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-cuda-pr.sarif
-
-      - uses: anchore/sbom-action@v0.17.2
+        continue-on-error: true
+      - name: Generate SBOM (Syft CPU PR)
+        uses: anchore/sbom-action@v0.17.2
         with:
           image: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
           output-file: sbom-cpu-pr-${{ steps.prep.outputs.sha }}.spdx.json
           format: spdx-json
-      - uses: anchore/sbom-action@v0.17.2
+      - name: Generate SBOM (Syft CUDA PR)
+        uses: anchore/sbom-action@v0.17.2
         with:
           image: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
           output-file: sbom-cuda-pr-${{ steps.prep.outputs.sha }}.spdx.json
