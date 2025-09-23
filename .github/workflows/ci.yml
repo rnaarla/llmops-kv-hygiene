@@ -219,7 +219,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Trivy scan (CPU)
-        uses: aquasecurity/trivy-action@v0.33.1
+        uses: aquasecurity/trivy-action@0.33.0
         with:
           image-ref: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
           format: sarif
@@ -230,7 +230,7 @@ jobs:
           exit-code: '0'
         continue-on-error: true
       - name: Trivy scan (CUDA)
-        uses: aquasecurity/trivy-action@v0.33.1
+        uses: aquasecurity/trivy-action@0.33.0
         with:
           image-ref: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
           format: sarif
@@ -333,7 +333,7 @@ jobs:
             TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121
           cache-from: type=gha
       - name: Trivy scan (CPU) [PR]
-        uses: aquasecurity/trivy-action@v0.33.1
+        uses: aquasecurity/trivy-action@0.33.0
         with:
           image-ref: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
           format: sarif
@@ -344,7 +344,7 @@ jobs:
           exit-code: '0'
         continue-on-error: true
       - name: Trivy scan (CUDA) [PR]
-        uses: aquasecurity/trivy-action@v0.33.1
+        uses: aquasecurity/trivy-action@0.33.0
         with:
           image-ref: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
           format: sarif

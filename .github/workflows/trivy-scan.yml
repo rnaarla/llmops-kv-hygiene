@@ -34,7 +34,7 @@ jobs:
         run: |
           docker pull "${{ steps.meta.outputs.image }}" || echo "Image not yet published; continuing with scan attempt."
       - name: Run Trivy (table report)
-        uses: aquasecurity/trivy-action@v0.33.1
+        uses: aquasecurity/trivy-action@0.33.0
         with:
           scan-type: ${{ matrix.target }}
           image-ref: ${{ matrix.target == 'image' && steps.meta.outputs.image || '' }}
@@ -54,7 +54,7 @@ jobs:
           name: trivy-${{ matrix.target }}-results
           path: trivy-${{ matrix.target }}-results.txt
       - name: Run Trivy (SARIF report)
-        uses: aquasecurity/trivy-action@v0.33.1
+        uses: aquasecurity/trivy-action@0.33.0
         with:
           scan-type: ${{ matrix.target }}
           image-ref: ${{ matrix.target == 'image' && steps.meta.outputs.image || '' }}
