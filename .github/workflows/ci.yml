@@ -173,6 +173,29 @@ jobs:
           sys.exit(0 if pct >= 90.0 else 2)
           PY
 
+  trivy-repo-scan:
+    name: Repo vulnerability + secret scan (fs)
+    needs: coverage-aggregate
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trivy filesystem scan (vuln + secrets)
+        uses: aquasecurity/trivy-action@0.33.0
+        with:
+          scan-type: fs
+          scanners: vuln,secret
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '0'
+          output: trivy-fs.txt
+      - name: Upload repo scan report
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-fs-report
+          path: trivy-fs.txt
+
   docker-images:
     name: Build and push Docker images (CPU + CUDA)
     needs: coverage-aggregate

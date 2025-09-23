@@ -294,8 +294,9 @@ Recent pipeline hardening work introduced layered quality and security gates:
    - Syft/Trivy generated artifacts (SBOM and SARIF) uploaded for audit; can be consumed by code-scanning UI.
 5. Optional Vulnerability Gating (HIGH/CRITICAL)
    - Controlled by secret `VULN_GATING`; when set to `true`, any HIGH or CRITICAL finding in Trivy SARIF fails the job.
-6. Standalone Scheduled Scan
-   - `trivy-scan.yml` runs on `main` pushes + weekly cron and supports the same optional gating.
+6. Repository (FS + secret) Scan
+
+- Integrated into `ci.yml` (`trivy-repo-scan` job) performing filesystem vulnerability + secret scanning (table report + artifact) after coverage aggregation.
 
 ## Feature Matrix
 
@@ -316,10 +317,10 @@ Recent pipeline hardening work introduced layered quality and security gates:
 | CI Gate | Hygiene Threshold Checker | Enforces coverage / quarantine limits | `eviction_checker.py` | In CI | CLI flags | Merge/deploy blocked |
 | CI Gate | Coverage ≥ 90% | Line/branch coverage enforcement | `ci.yml` | Yes | Coverage flag in workflow | Merge blocked |
 | Security | Container Image Build | CPU(+CUDA) image build & tag | `ci.yml` | On non-PR | — | Deploy artifact missing |
-| Security | Trivy Scan (Image/FS) | Vulnerability + secret scan (table + SARIF) | `ci.yml`, `trivy-scan.yml` | Yes | `VULN_GATING` secret | If gated & fail → pipeline fails |
-| Security | Vulnerability Gating (HIGH/CRITICAL) | Fail on any HIGH/CRITICAL findings | Workflows (conditional step) | Off by default | `VULN_GATING=true` | Build/scan job fails |
+| Security | Trivy Image Scan | Image vulnerability scan (SARIF) for CPU/CUDA images | `ci.yml` | Yes | `VULN_GATING` secret | If gated & fail → pipeline fails |
+| Security | Trivy Repo (FS + Secret) Scan | Filesystem vulnerability + secret scan (table report) | `ci.yml` | Yes | Informational (gating optional future) | None (artifact only) |
+| Security | Vulnerability Gating (HIGH/CRITICAL) | Fail on any HIGH/CRITICAL findings (images) | `ci.yml` (conditional step) | Off by default | `VULN_GATING=true` | Build/scan job fails |
 | Security | SBOM Generation | Software bill of materials artifact | `ci.yml` | Yes | — | Compliance signal reduced if absent |
-| Security | Scheduled Weekly Scan | Cron-based fresh scan of code/image | `trivy-scan.yml` | Yes | `VULN_GATING` secret | Alerts via gating failure |
 | Compliance | HMAC Log Strengthening | Adds HMAC to each forensic line | `forensic_logger.py` | Optional | `FORENSIC_HMAC_SECRET` | Lower tamper resistance if unset |
 | Observability | Activation Anomaly Logging | z-score + max outlier detection | `activation_logger.py` | Manual use | `z_threshold` arg | Missed anomaly detection |
 | Resilience | Double-Pass Sanitization | Second overwrite for assurance | `cache_tracer.py` | Off | `KV_DOUBLE_PASS_DEFAULT=true` | Slight perf cost if enabled |
@@ -373,29 +374,47 @@ print('[gate] Pass: no HIGH/CRITICAL findings.')
 PY
 ```
 
-### Standalone Trivy Scan (`trivy-scan.yml`)
+### Repository (Filesystem + Secret) Scan (Integrated)
 
-Runs a matrix across `image` and `fs` targets:
+The `trivy-repo-scan` job in `ci.yml` performs a lightweight post-coverage scan:
 
-- Pulls latest built image (best effort) and scans it plus the repository filesystem.
-- Generates table output + SARIF (`trivy-<target>-results.*`).
-- Optional gating (same `VULN_GATING` secret) uses a lightweight `jq` parser to count HIGH/CRITICALs.
+- Scan type: `fs` with `scanners: vuln,secret`
+- Output: human-readable table uploaded as `trivy-fs-report` artifact
+- Exit code forced to 0 (non-gating) so hygiene/security signal remains non-blocking unless policy later requires
+- Rationale: catch accidental secret commits and early dependency CVEs without duplicating image rebuilds
 
-Snippet of gating via `jq` in scheduled scan:
+Example snippet (from `ci.yml`):
 
 ```yaml
-    - name: Enforce vulnerability policy (optional)
-      if: ${{ env.VULN_GATING == 'true' }}
-      run: |
-        f=trivy-image-results.sarif
-        if [ ! -f "$f" ]; then echo "[gate] No SARIF produced; allowing pass."; exit 0; fi
-        crit=$(jq -r '[.runs[0].results[]?.level // empty | ascii_upcase | select(.=="CRITICAL")] | length' "$f")
-        high=$(jq -r '[.runs[0].results[]?.level // empty | ascii_upcase | select(.=="HIGH")] | length' "$f")
-        echo "[gate] HIGH=$high CRITICAL=$crit"
-        if [ "$crit" -gt 0 ] || [ "$high" -gt 0 ]; then
-          echo "[gate] Policy violation: HIGH/CRITICAL findings present."; exit 1; fi
-        echo "[gate] Pass: no HIGH/CRITICAL findings."
+  trivy-repo-scan:
+    name: Repo vulnerability + secret scan (fs)
+    needs: coverage-aggregate
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trivy filesystem scan (vuln + secrets)
+        uses: aquasecurity/trivy-action@0.33.0
+        with:
+          scan-type: fs
+          scanners: vuln,secret
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '0'
+          output: trivy-fs.txt
+      - name: Upload repo scan report
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-fs-report
+          path: trivy-fs.txt
 ```
+
+Potential future enhancements:
+
+- Add SARIF export (`format: sarif`) for filesystem findings
+- Introduce optional gating with tolerances (e.g., allow ≤N HIGH)
+- Add license or IaC scanning layer
 
 ### Customizing / Extending Gating
 
