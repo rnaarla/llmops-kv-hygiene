@@ -59,13 +59,46 @@ Guarantees and limits
 
 Quickstart
 
-- Install (Python 3.11+):
-  - pip install -r requirements.txt
-- Run tests and generate metrics/prom textfile in forensics/:
-  - pytest -q
-  - python - <<'PY'\nfrom tools.cache_tracer import CacheTracer\nt=CacheTracer()\nh=t.allocate('t1','r1','m1',(256,),"float32",'cpu','numpy')\nt.mark_in_use(h); t.sanitize(h,async_=False,verify=True); t.free(h)\nt.export_metrics('forensics/coverage.json'); t.export_metrics_prometheus('forensics/metrics.prom')\nPY
-- Optional: enable pre‑commit hooks:
-  - pip install pre-commit && pre-commit install
+1. Install (Python 3.11+):
+
+  ```bash
+  pip install -r requirements.txt
+  ```
+
+1. Run tests:
+
+  ```bash
+  pytest -q
+  ```
+
+1. Minimal tracer usage (keyword-only API):
+
+  ```python
+  from tools.cache_tracer import CacheTracer
+
+  tracer = CacheTracer()
+  handle = tracer.allocate(
+     tenant_id="tenantA",
+     request_id="req123",
+     model_id="modelX",
+     shape=(256,),
+     dtype="float32",
+     device="cpu",
+     framework="numpy",
+  )
+  tracer.mark_in_use(handle)
+  tracer.sanitize(handle, async_=False, verify=True)
+  tracer.free(handle)
+  tracer.export_metrics("forensics/coverage.json")
+  tracer.export_metrics_prometheus("forensics/metrics.prom")
+  ```
+
+1. Optional: enable pre‑commit hooks:
+
+  ```bash
+  pip install pre-commit
+  pre-commit install
+  ```
 
 Setup
 
@@ -245,6 +278,172 @@ MIT © Contributors. See `LICENSE`.
 Contributing
 
 See `CONTRIBUTING.md`. For security issues, see `SECURITY.md`.
+
+## CI/CD & Security Scanning Enhancements
+
+Recent pipeline hardening work introduced layered quality and security gates:
+
+1. Test & Coverage Matrix
+   - Multi-version Python test matrix (see `ci.yml`) with unified coverage aggregation.
+   - Fails if overall line/branch coverage < **90%**.
+2. Forensic & Hygiene Gates
+   - Metrics export + `eviction_checker.py` invoked to enforce runtime hygiene (sanitization coverage, quarantine counts).
+3. Container Build & Scan
+   - CPU + (optional) CUDA images built and tagged with short SHA; Trivy scans (table + SARIF) execute post-build.
+4. SBOM & Vulnerability Surfaces
+   - Syft/Trivy generated artifacts (SBOM and SARIF) uploaded for audit; can be consumed by code-scanning UI.
+5. Optional Vulnerability Gating (HIGH/CRITICAL)
+   - Controlled by secret `VULN_GATING`; when set to `true`, any HIGH or CRITICAL finding in Trivy SARIF fails the job.
+6. Standalone Scheduled Scan
+   - `trivy-scan.yml` runs on `main` pushes + weekly cron and supports the same optional gating.
+
+## Feature Matrix
+
+| Category | Feature | Description | Primary File(s) / Workflow | Default Enabled | Gated / Config | Failure Impact |
+|----------|---------|-------------|-----------------------------|-----------------|----------------|----------------|
+| Core Hygiene | Allocation Tagging | Per-tenant/request/model metadata on buffers | `tools/cache_tracer.py` | Yes | — | N/A |
+| Core Hygiene | Zeroization (CPU / Torch) | Full buffer overwrite + coverage computation | `cache_tracer.py`, `sanitizer.py` | Yes | `KV_DOUBLE_PASS_DEFAULT` (2nd pass) | Low (quarantine if coverage inadequate) |
+| Core Hygiene | Deterministic Sampling Verify | Sample indices recorded for attestation | `cache_tracer.py` | Yes | `KV_VERIFY_SAMPLES_DEFAULT` | If verify fails → coverage=0 → quarantine |
+| Policies | TTL Enforcement | Quarantine on expired lifetime | `policies.py`, `cache_tracer.py` | Yes (if TTL provided) | `KV_DEFAULT_TTL_SEC` | Buffer quarantined |
+| Policies | Reuse Limit | Quarantine when reuse > limit | `cache_tracer.py` | Yes | `KV_DEFAULT_MAX_REUSE` | Buffer quarantined |
+| Forensics | Hash-Chained Log | Append-only JSONL with prev/curr hash | `forensic_logger.py` | Yes | `FORENSIC_HMAC_SECRET` (adds HMAC) | Integrity evidence degraded if broken |
+| Forensics | Rotation & Linkage | Size-based rotation with linkage record | `forensic_logger.py` | Yes | `_max_bytes` ctor param | Linkage mismatch surfaced in verify |
+| Forensics | Integrity Verification | Single file & full rotation chain checks | `forensic_logger.py`, `verify_logs.py` | Manual/CI | CLI invocation | Non-zero exit (ops alert) |
+| Forensics | Log Pruning & Archive | Age/Count prune with optional archive directory | `log_pruner.py`, `verify_logs.py` | On demand | CLI flags / env | None (older logs removed) |
+| Metrics | JSON Metrics Export | Hygiene KPIs (coverage, durations, reuse) | `cache_tracer.py` | Manual | — | N/A |
+| Metrics | Prometheus Textfile Export | Textfile collector lines for scraping | `cache_tracer.py` | Manual | — | Observability gap if missing |
+| Metrics | HTTP Metrics Server | Lightweight HTTP `/metrics` endpoint | `metrics_exporter.py` | Manual start | `METRICS_FILE`, `METRICS_PORT` | Monitoring gap if absent |
+| CI Gate | Hygiene Threshold Checker | Enforces coverage / quarantine limits | `eviction_checker.py` | In CI | CLI flags | Merge/deploy blocked |
+| CI Gate | Coverage ≥ 90% | Line/branch coverage enforcement | `ci.yml` | Yes | Coverage flag in workflow | Merge blocked |
+| Security | Container Image Build | CPU(+CUDA) image build & tag | `ci.yml` | On non-PR | — | Deploy artifact missing |
+| Security | Trivy Scan (Image/FS) | Vulnerability + secret scan (table + SARIF) | `ci.yml`, `trivy-scan.yml` | Yes | `VULN_GATING` secret | If gated & fail → pipeline fails |
+| Security | Vulnerability Gating (HIGH/CRITICAL) | Fail on any HIGH/CRITICAL findings | Workflows (conditional step) | Off by default | `VULN_GATING=true` | Build/scan job fails |
+| Security | SBOM Generation | Software bill of materials artifact | `ci.yml` | Yes | — | Compliance signal reduced if absent |
+| Security | Scheduled Weekly Scan | Cron-based fresh scan of code/image | `trivy-scan.yml` | Yes | `VULN_GATING` secret | Alerts via gating failure |
+| Compliance | HMAC Log Strengthening | Adds HMAC to each forensic line | `forensic_logger.py` | Optional | `FORENSIC_HMAC_SECRET` | Lower tamper resistance if unset |
+| Observability | Activation Anomaly Logging | z-score + max outlier detection | `activation_logger.py` | Manual use | `z_threshold` arg | Missed anomaly detection |
+| Resilience | Double-Pass Sanitization | Second overwrite for assurance | `cache_tracer.py` | Off | `KV_DOUBLE_PASS_DEFAULT=true` | Slight perf cost if enabled |
+| Performance | P50/P95 Track | Sanitize duration distribution | `cache_tracer.py` | Yes | — | Missing latency insight |
+| Performance | Reuse Rate Metric | reuse_events / allocations | `cache_tracer.py` | Yes | — | Policy tuning insight lost |
+| Ops | Verify + Prune CLI | Combined integrity + retention tool | `verify_logs.py` | Manual/cron | CLI flags | Old logs accumulate if unused |
+| Future (Planned) | Kubernetes Cron Examples | CronJobs for verify/prune/gates | (planned docs) | No | — | Manual scripting needed |
+| Future (Planned) | Real CUDA Async Streams | True async zeroization path | (future implementation) | No | — | Lower overlap efficiency |
+| Future (Planned) | Composite Action for Gating | Reusable vuln gate action | (future action) | No | — | Duplication across repos |
+
+
+### Enabling Vulnerability Gating
+
+Add a repository (or org) secret named `VULN_GATING` with value `true`.
+
+Behavior:
+
+- Secret unset or not exactly `true` (case-sensitive) ⇒ scans are informational only (summaries + artifacts).
+- Secret set to `true` ⇒ build or scheduled scan job fails if any HIGH or CRITICAL severity is present.
+
+### Gating Logic (Excerpt from `ci.yml`)
+
+```yaml
+    - name: Export gating flag
+      env:
+        RAW_FLAG: ${{ secrets.VULN_GATING }}
+      run: echo "VULN_GATING=${RAW_FLAG:-false}" >> $GITHUB_ENV
+
+    - name: Enforce vulnerability policy (fail on any HIGH/CRITICAL)
+      if: ${{ env.VULN_GATING == 'true' }}
+      run: |
+        python - <<'PY'
+import json, pathlib, sys
+sarif = pathlib.Path('trivy-image-results.sarif')  # (example path)
+if not sarif.exists():
+    print('[gate] No SARIF produced; allowing pass.')
+    raise SystemExit(0)
+data = json.loads(sarif.read_text())
+results = data.get('runs', [{}])[0].get('results', [])
+sev = {}
+for r in results:
+    lvl = r.get('level','').upper()
+    sev[lvl] = sev.get(lvl,0)+1
+crit = sev.get('CRITICAL',0)
+high = sev.get('HIGH',0)
+print(f'[gate] HIGH={high} CRITICAL={crit}')
+if crit or high:
+    print('[gate] Policy violation: HIGH/CRITICAL findings present.')
+    sys.exit(1)
+print('[gate] Pass: no HIGH/CRITICAL findings.')
+PY
+```
+
+### Standalone Trivy Scan (`trivy-scan.yml`)
+
+Runs a matrix across `image` and `fs` targets:
+
+- Pulls latest built image (best effort) and scans it plus the repository filesystem.
+- Generates table output + SARIF (`trivy-<target>-results.*`).
+- Optional gating (same `VULN_GATING` secret) uses a lightweight `jq` parser to count HIGH/CRITICALs.
+
+Snippet of gating via `jq` in scheduled scan:
+
+```yaml
+    - name: Enforce vulnerability policy (optional)
+      if: ${{ env.VULN_GATING == 'true' }}
+      run: |
+        f=trivy-image-results.sarif
+        if [ ! -f "$f" ]; then echo "[gate] No SARIF produced; allowing pass."; exit 0; fi
+        crit=$(jq -r '[.runs[0].results[]?.level // empty | ascii_upcase | select(.=="CRITICAL")] | length' "$f")
+        high=$(jq -r '[.runs[0].results[]?.level // empty | ascii_upcase | select(.=="HIGH")] | length' "$f")
+        echo "[gate] HIGH=$high CRITICAL=$crit"
+        if [ "$crit" -gt 0 ] || [ "$high" -gt 0 ]; then
+          echo "[gate] Policy violation: HIGH/CRITICAL findings present."; exit 1; fi
+        echo "[gate] Pass: no HIGH/CRITICAL findings."
+```
+
+### Customizing / Extending Gating
+
+You can introduce thresholds instead of zero tolerance:
+
+```yaml
+env:
+  MAX_HIGH: 0
+  MAX_CRITICAL: 0
+...
+    - name: Enforce policy (tolerances)
+      if: ${{ env.VULN_GATING == 'true' }}
+      run: |
+        f=trivy-image-results.sarif
+        [ -f "$f" ] || { echo '[gate] No SARIF'; exit 0; }
+        crit=$(jq -r '[.runs[0].results[]?.level // empty | ascii_upcase | select(.=="CRITICAL")] | length' "$f")
+        high=$(jq -r '[.runs[0].results[]?.level // empty | ascii_upcase | select(.=="HIGH")] | length' "$f")
+        echo "[gate] HIGH=$high CRITICAL=$crit (limits H=$MAX_HIGH C=$MAX_CRITICAL)"
+        if [ "$crit" -gt "$MAX_CRITICAL" ] || [ "$high" -gt "$MAX_HIGH" ]; then
+          echo '[gate] Policy violation'; exit 1; fi
+        echo '[gate] Pass';
+```
+
+### Consuming SARIF Locally
+
+To inspect findings locally without waiting for code scanning UI:
+
+```bash
+jq '.runs[0].results[] | {ruleId, level, message: .message.text}' trivy-image-results.sarif | less
+```
+
+### Failure Semantics
+
+- Gating steps run after artifacts upload, so even on failure you retain SBOM/SARIF evidence.
+- Missing SARIF files default to soft-pass (graceful degradation) to avoid noisy false negatives when an upstream scan is skipped.
+
+### Linter Warnings About `secrets.*`
+
+Local YAML or action linters may surface warnings like “Context access might be invalid: VULN_GATING”. These are static-analysis false positives—the live GitHub Actions runtime resolves undefined secrets to empty strings; gating defaults `false` unless explicitly enabled.
+
+Mitigations (optional):
+
+- Add ignore directives (`# yamllint disable-line`).
+- Provide a mock `.secrets-example` file for certain linters.
+- Wrap secret expansion in a neutral step that echoes a redacted placeholder when unset.
+
+---
+_Updated: Vulnerability gating, scheduled scanning, coverage hardening, and forensic gate documentation added._
 
 ## Hygiene Workflow & Quality Gates
 
