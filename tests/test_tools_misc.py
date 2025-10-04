@@ -38,18 +38,13 @@ def test_metrics_exporter_serves(tmp_path, monkeypatch):
     tracer.free(h)
     tracer.export_metrics_prometheus(str(metrics_file))
 
-    # Launch exporter in thread
-    port = _free_port()
+    # Launch exporter in thread using port 0 (let OS allocate a free port to avoid races)
     monkeypatch.setenv("METRICS_FILE", str(metrics_file))
-    monkeypatch.setenv("METRICS_PORT", str(port))
     from tools import metrics_exporter
 
-    thread = threading.Thread(
-        target=metrics_exporter.HTTPServer(
-            (metrics_exporter.BIND, port), metrics_exporter.Handler
-        ).serve_forever,
-        daemon=True,
-    )
+    server = metrics_exporter.HTTPServer((metrics_exporter.BIND, 0), metrics_exporter.Handler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     time.sleep(0.05)
 
@@ -329,12 +324,11 @@ def test_double_pass_enabled(tmp_path, monkeypatch):
 
 def test_metrics_exporter_empty_file(monkeypatch, tmp_path):
     # Point exporter to a file that does not yet exist (empty response branch)
-    port = _free_port()
     monkeypatch.setenv("METRICS_FILE", str(tmp_path / "missing.prom"))
-    monkeypatch.setenv("METRICS_PORT", str(port))
     from tools import metrics_exporter
 
-    server = metrics_exporter.HTTPServer((metrics_exporter.BIND, port), metrics_exporter.Handler)
+    server = metrics_exporter.HTTPServer((metrics_exporter.BIND, 0), metrics_exporter.Handler)
+    port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     time.sleep(0.05)

@@ -1,5 +1,12 @@
 name: kv-hygiene-ci
 
+env:
+  # Optional gating controls. Set VULN_GATING=1 (e.g. repository / org env var or secret) to activate.
+  VULN_GATING: ''
+  # Soft thresholds (counts) for HIGH / CRITICAL; defaults effectively disable unless overridden.
+  MAX_HIGH: '9999'
+  MAX_CRITICAL: '9999'
+
 on:
   push:
     branches: [ main ]
@@ -180,21 +187,61 @@ jobs:
     if: github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v4
-      - name: Trivy filesystem scan (vuln + secrets)
+      - name: Trivy filesystem scan JSON (vuln + secrets)
         uses: aquasecurity/trivy-action@0.33.0
         with:
           scan-type: fs
           scanners: vuln,secret
-          format: table
+          format: json
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: '0'
-          output: trivy-fs.txt
-      - name: Upload repo scan report
+          output: trivy-fs.json
+      - name: Trivy filesystem scan SARIF (vuln + secrets)
+        uses: aquasecurity/trivy-action@0.33.0
+        with:
+          scan-type: fs
+          scanners: vuln,secret
+          format: sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '0'
+          output: trivy-fs.sarif
+      - name: Upload Trivy FS SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+        continue-on-error: true
+      - name: Upload repo scan reports
         uses: actions/upload-artifact@v4
         with:
           name: trivy-fs-report
-          path: trivy-fs.txt
+          path: |
+            trivy-fs.json
+            trivy-fs.sarif
+      - name: FS vulnerability threshold gate
+        if: env.VULN_GATING == '1'
+        run: |
+          python - <<'PY'
+          import json, os, sys
+          data = json.load(open('trivy-fs.json'))
+          high=critical=0
+          for result in data.get('Results', []) or []:
+              for v in result.get('Vulnerabilities', []) or []:
+                  sev = (v.get('Severity') or '').upper()
+                  if sev == 'HIGH': high += 1
+                  elif sev == 'CRITICAL': critical += 1
+              for s in result.get('Secrets', []) or []:  # secrets are informational for now
+                  pass
+          max_high = int(os.environ.get('MAX_HIGH','9999'))
+          max_critical = int(os.environ.get('MAX_CRITICAL','9999'))
+          print(f'FS scan counts: HIGH={high} CRITICAL={critical} (limits H={max_high} C={max_critical})')
+
+          if critical > max_critical or high > max_high:
+              print('Threshold exceeded (filesystem scan). Failing job.')
+              sys.exit(2)
+          PY
 
   docker-images:
     name: Build and push Docker images (CPU + CUDA)
@@ -218,16 +265,20 @@ jobs:
           echo "repo=ghcr.io/${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
           echo "sha=${GITHUB_SHA::12}" >> $GITHUB_OUTPUT
       - name: Build and push CPU image
+        id: build_cpu
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile.cpu
           platforms: linux/amd64
           push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: |
             ${{ steps.prep.outputs.repo }}:cpu-latest
             ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
       - name: Build and push CUDA image
+        id: build_cuda
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -263,6 +314,28 @@ jobs:
           ignore-unfixed: true
           exit-code: '0'
         continue-on-error: true
+      - name: Trivy scan JSON (CPU)
+        uses: aquasecurity/trivy-action@0.33.0
+        with:
+          image-ref: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
+          format: json
+          output: trivy-cpu.json
+          severity: CRITICAL,HIGH
+          vuln-type: os,library
+          ignore-unfixed: true
+          exit-code: '0'
+        continue-on-error: true
+      - name: Trivy scan JSON (CUDA)
+        uses: aquasecurity/trivy-action@0.33.0
+        with:
+          image-ref: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
+          format: json
+          output: trivy-cuda.json
+          severity: CRITICAL,HIGH
+          vuln-type: os,library
+          ignore-unfixed: true
+          exit-code: '0'
+        continue-on-error: true
       - name: Upload Trivy results (CPU)
         uses: github/codeql-action/upload-sarif@v3
         with:
@@ -275,6 +348,28 @@ jobs:
           sarif_file: trivy-cuda.sarif
           category: trivy-image-cuda
         continue-on-error: true
+      - name: Normalize vulnerabilities (Trivy + Grype placeholder pre-SBOM)
+        run: |
+          python - <<'PY'
+          import json, glob, os
+          agg = {}
+          def add(sev):
+              sev=sev.upper()
+              if sev not in agg: agg[sev]=0
+              agg[sev]+=1
+          # Trivy JSON (if present yet; SBOM not required)
+          for f in ['trivy-cpu.json','trivy-cuda.json']:
+              if not os.path.exists(f):
+                  continue
+              data=json.load(open(f))
+              for res in data.get('Results',[]) or []:
+                  for v in res.get('Vulnerabilities',[]) or []:
+                      sev=v.get('Severity')
+                      if sev: add(sev)
+          # Grype will be processed later after SBOM; second normalization step will overwrite
+          json.dump({'counts':agg,'stage':'pre-sbom'}, open('vuln-summary-incremental.json','w'), indent=2)
+          print('Pre-SBOM vuln counts:', agg)
+          PY
       - name: Free disk space (pre-SBOM)
         run: |
           echo "Disk usage before cleanup:" || true
@@ -323,6 +418,78 @@ jobs:
             --fail-on high --output json > grype-cuda.json
           cat grype-cuda.json
         continue-on-error: true
+      - name: Normalize vulnerabilities (Trivy + Grype final)
+        run: |
+          python - <<'PY'
+          import json, os, glob
+          counts = {}
+          def add(sev):
+              sev=sev.upper(); counts[sev]=counts.get(sev,0)+1
+          # Trivy image scans
+          for f in ['trivy-cpu.json','trivy-cuda.json']:
+              if os.path.exists(f):
+                  data=json.load(open(f))
+                  for res in data.get('Results',[]) or []:
+                      for v in res.get('Vulnerabilities',[]) or []:
+                          if v.get('Severity'): add(v['Severity'])
+          # Grype scans
+          for f in ['grype-cpu.json','grype-cuda.json']:
+              if os.path.exists(f):
+                  data=json.load(open(f))
+                  for m in data.get('matches',[]) or []:
+                      sev = (((m.get('vulnerability') or {}).get('severity')) or '').upper()
+                      if sev: add(sev)
+          # FS scan if artifact present (same job not, but may be copied in future)
+          if os.path.exists('trivy-fs.json'):
+              data=json.load(open('trivy-fs.json'))
+              for res in data.get('Results',[]) or []:
+                  for v in res.get('Vulnerabilities',[]) or []:
+                      if v.get('Severity'): add(v['Severity'])
+          json.dump({'counts':counts,'stage':'post-sbom'}, open('vuln-summary.json','w'), indent=2)
+          print('Final aggregated vulnerability counts:', counts)
+          PY
+      - name: Vulnerability threshold gate (images)
+        if: env.VULN_GATING == '1'
+        run: |
+          python - <<'PY'
+          import json, os, sys
+          data=json.load(open('vuln-summary.json'))
+          counts=data.get('counts',{})
+          high=counts.get('HIGH',0)
+
+          critical=counts.get('CRITICAL',0)
+          max_high=int(os.environ.get('MAX_HIGH','9999'))
+          max_critical=int(os.environ.get('MAX_CRITICAL','9999'))
+          print(f'Aggregated vuln counts: HIGH={high} CRITICAL={critical} (limits H={max_high} C={max_critical})')
+          if critical > max_critical or high > max_high:
+              print('Threshold exceeded (image scans). Failing job.')
+              sys.exit(2)
+          PY
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.4.0
+      - name: Sign images (keyless)
+        env:
+          COSIGN_EXPERIMENTAL: 'true'
+        run: |
+          set -e
+          for tag in \
+            ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }} \
+            ${{ steps.prep.outputs.repo }}:cpu-latest \
+            ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }} \
+            ${{ steps.prep.outputs.repo }}:cuda-latest; do
+            echo "Signing $tag";
+            cosign sign --yes $tag || exit 1;
+          done
+      - name: Attest build provenance (CPU)
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
+          subject-digest: ${{ steps.build_cpu.outputs.digest }}
+      - name: Attest build provenance (CUDA)
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
+          subject-digest: ${{ steps.build_cuda.outputs.digest }}
       - name: Upload SBOM artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -331,6 +498,8 @@ jobs:
             sbom-*.spdx.json
             sbom-*.cyclonedx.json
             grype-*.json
+            vuln-summary*.json
+            trivy-*.json
 
   docker-scan-pr:
     name: Scan Docker images for PRs (no push)
@@ -356,6 +525,7 @@ jobs:
           push: false
           tags: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
           cache-from: type=gha
+          cache-to: type=gha,mode=max
       - name: Build CUDA image (no push)
         uses: docker/build-push-action@v6
         with:
@@ -367,6 +537,7 @@ jobs:
           build-args: |
             TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121
           cache-from: type=gha
+          cache-to: type=gha,mode=max
       - name: Trivy scan (CPU) [PR]
         uses: aquasecurity/trivy-action@0.33.0
         with:
@@ -389,6 +560,28 @@ jobs:
           ignore-unfixed: true
           exit-code: '0'
         continue-on-error: true
+      - name: Trivy scan JSON (CPU) [PR]
+        uses: aquasecurity/trivy-action@0.33.0
+        with:
+          image-ref: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
+          format: json
+          output: trivy-cpu-pr.json
+          severity: CRITICAL,HIGH
+          vuln-type: os,library
+          ignore-unfixed: true
+          exit-code: '0'
+        continue-on-error: true
+      - name: Trivy scan JSON (CUDA) [PR]
+        uses: aquasecurity/trivy-action@0.33.0
+        with:
+          image-ref: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
+          format: json
+          output: trivy-cuda-pr.json
+          severity: CRITICAL,HIGH
+          vuln-type: os,library
+          ignore-unfixed: true
+          exit-code: '0'
+        continue-on-error: true
       - name: Upload Trivy SARIF results (PR CPU)
         uses: github/codeql-action/upload-sarif@v3
         with:
@@ -401,6 +594,37 @@ jobs:
           sarif_file: trivy-cuda-pr.sarif
           category: trivy-pr-cuda
         continue-on-error: true
+      - name: Normalize vulnerabilities (PR)
+        run: |
+          python - <<'PY'
+          import json, os
+          counts={}
+          def add(sev):
+              sev=sev.upper(); counts[sev]=counts.get(sev,0)+1
+          for f in ['trivy-cpu-pr.json','trivy-cuda-pr.json']:
+              if os.path.exists(f):
+                  data=json.load(open(f))
+                  for res in data.get('Results',[]) or []:
+                      for v in res.get('Vulnerabilities',[]) or []:
+                          if v.get('Severity'): add(v['Severity'])
+          json.dump({'counts':counts,'stage':'pr'}, open('vuln-summary-pr.json','w'), indent=2)
+          print('PR aggregated vulnerability counts:', counts)
+          PY
+      - name: Vulnerability threshold gate (PR images)
+        if: env.VULN_GATING == '1'
+        run: |
+          python - <<'PY'
+          import json, os, sys
+          data=json.load(open('vuln-summary-pr.json'))
+          counts=data.get('counts',{})
+          high=counts.get('HIGH',0); critical=counts.get('CRITICAL',0)
+          max_high=int(os.environ.get('MAX_HIGH','9999'))
+          max_critical=int(os.environ.get('MAX_CRITICAL','9999'))
+          print(f'PR vuln counts: HIGH={high} CRITICAL={critical} (limits H={max_high} C={max_critical})')
+          if critical > max_critical or high > max_high:
+              print('Threshold exceeded (PR image scans). Failing job.')
+              sys.exit(2)
+          PY
       - name: Generate SBOM (Syft CPU PR)
         uses: anchore/sbom-action@v0.17.2
         with:
@@ -417,4 +641,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sbom-pr
-          path: sbom-*-pr-*.spdx.json
+          path: |
+            sbom-*-pr-*.spdx.json
+            trivy-*-pr.json
+            vuln-summary-pr.json
