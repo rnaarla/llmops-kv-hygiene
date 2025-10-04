@@ -1,3 +1,6 @@
+default_language_version:
+  python: python3.11
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
@@ -18,25 +21,34 @@ repos:
     hooks:
       - id: ruff
         args: ["--fix"]
+  # Converted local hooks to managed python environments for deterministic behavior.
   - repo: local
     hooks:
       - id: mypy
         name: mypy
-        language: system
-        entry: bash -c 'mypy --config-file mypy.ini $(git ls-files "tools/*.py") $(git ls-files "tests/*.py")'
+        language: python
+        # Run directly over tools & tests; pre-commit environment supplies mypy dependency.
+        entry: mypy --config-file mypy.ini tools tests
         pass_filenames: false
         stages: [pre-commit]
-  - repo: local
-    hooks:
+        additional_dependencies:
+          - mypy==1.10.0
       - id: audit-type-ignores
         name: audit type ignores
+        language: python
         entry: python tools/audit_type_ignores.py
-        language: system
         pass_filenames: false
         stages: [pre-commit]
+        # No extra deps; stdlib only.
       - id: pytest-quick
         name: pytest quick subset
-        entry: bash -c 'pytest -q --maxfail=1'
-        language: system
+        language: python
+        entry: pytest -q --maxfail=1
         pass_filenames: false
         stages: [pre-commit]
+        # Include core runtime deps required for imports in tests.
+        additional_dependencies:
+          - pytest==8.3.2
+          - hypothesis==6.92.0
+          - numpy==1.26.4
+          - prometheus-client==0.20.0
