@@ -1,0 +1,12 @@
+{
+  "coverage": {
+    "baseline": 90.0,
+    "current": 90.0
+  },
+  "vulnerabilities": {
+    "high": 0,
+    "critical": 0
+  },
+  "history": [],
+  "last_updated": "2025-01-01T00:00:00Z"
+}
