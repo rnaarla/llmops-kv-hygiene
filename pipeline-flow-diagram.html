@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI-Augmented CI/CD Pipeline</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 30px;
+            width: 100%;
+            max-width: 1800px;
+            height: 95vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            color: #1a202c;
+            font-size: 2em;
+            font-weight: 800;
+            margin-bottom: 5px;
+        }
+
+        .subtitle {
+            color: #718096;
+            font-size: 0.9em;
+        }
+
+        .pipeline {
+            flex: 1;
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            grid-template-rows: repeat(2, 1fr);
+            gap: 15px;
+            position: relative;
+        }
+
+        .stage {
+            background: white;
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 15px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            transition: all 0.3s ease;
+        }
+
+        .stage:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15);
+        }
+
+        .stage.ai-powered {
+            border-color: #9f7aea;
+            background: linear-gradient(135deg, #ffffff 0%, #faf5ff 100%);
+        }
+
+        .stage.wide {
+            grid-column: span 2;
+        }
+
+        .stage-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #e2e8f0;
+        }
+
+        .stage-number {
+            background: linear-gradient(135deg, #4299e1 0%, #3182ce 100%);
+            color: white;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 0.85em;
+            flex-shrink: 0;
+        }
+
+        .stage.ai-powered .stage-number {
+            background: linear-gradient(135deg, #9f7aea 0%, #805ad5 100%);
+        }
+
+        .stage-title {
+            font-size: 1em;
+            font-weight: 700;
+            color: #2d3748;
+            flex: 1;
+        }
+
+        .badge {
+            padding: 2px 6px;
+            border-radius: 8px;
+            font-size: 0.65em;
+            font-weight: 600;
+        }
+
+        .ai-badge {
+            background: linear-gradient(135deg, #9f7aea 0%, #805ad5 100%);
+            color: white;
+        }
+
+        .new-badge {
+            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+            color: white;
+        }
+
+        .stage-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .description {
+            color: #4a5568;
+            font-size: 0.75em;
+            line-height: 1.4;
+            margin-bottom: 5px;
+            font-weight: 500;
+        }
+
+        .highlights {
+            list-style: none;
+            font-size: 0.7em;
+            color: #2d3748;
+            line-height: 1.5;
+        }
+
+        .highlights li {
+            display: flex;
+            align-items: flex-start;
+            gap: 5px;
+            padding: 2px 0;
+        }
+
+        .highlights li::before {
+            content: "▸";
+            color: #4299e1;
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+
+        .stage.ai-powered .highlights li::before {
+            color: #9f7aea;
+        }
+
+        .highlights strong {
+            color: #1a202c;
+        }
+
+        /* Flow Arrows */
+        .arrow {
+            position: absolute;
+            color: #4299e1;
+            font-size: 1.5em;
+            font-weight: 700;
+            z-index: 10;
+        }
+
+        .arrow-right-1 { top: 50%; right: -20px; transform: translateY(-50%); }
+        .arrow-right-2 { top: 50%; right: -20px; transform: translateY(-50%); }
+        .arrow-down-1 { bottom: -20px; left: 50%; transform: translateX(-50%); }
+        .arrow-down-2 { bottom: -20px; left: 50%; transform: translateX(-50%); }
+
+        .footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 20px;
+            padding-top: 15px;
+            border-top: 2px solid #e2e8f0;
+        }
+
+        .legend {
+            display: flex;
+            gap: 20px;
+            font-size: 0.75em;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .legend-box {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+            border: 2px solid #e2e8f0;
+        }
+
+        .legend-box.ai {
+            background: linear-gradient(135deg, #ffffff 0%, #faf5ff 100%);
+            border-color: #9f7aea;
+        }
+
+        .metrics {
+            display: flex;
+            gap: 15px;
+            font-size: 0.7em;
+        }
+
+        .metric {
+            text-align: center;
+        }
+
+        .metric-value {
+            font-size: 1.3em;
+            font-weight: 800;
+            color: #2d3748;
+        }
+
+        .metric-label {
+            color: #718096;
+            font-size: 0.85em;
+        }
+
+        .conditional-label {
+            position: absolute;
+            bottom: -25px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #fef5e7;
+            border: 1px solid #f39c12;
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-size: 0.65em;
+            font-weight: 600;
+            color: #e67e22;
+            white-space: nowrap;
+            z-index: 11;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 AI-Augmented CI/CD Pipeline</h1>
+            <div class="subtitle">llmops-kv-hygiene • Claude 3.5 Sonnet • Intelligent DevOps Automation</div>
+        </div>
+
+        <div class="pipeline">
+            <!-- Row 1 -->
+            <div class="stage">
+                <div class="stage-header">
+                    <div class="stage-number">1</div>
+                    <div class="stage-title">Code Quality</div>
+                </div>
+                <div class="stage-content">
+                    <div class="description">Static analysis & linting</div>
+                    <ul class="highlights">
+                        <li><strong>Ruff</strong> linting & formatting</li>
+                        <li><strong>Mypy</strong> type checking</li>
+                        <li><strong>Bandit</strong> security checks</li>
+                        <li>Auto-format on save</li>
+                    </ul>
+                </div>
+                <div class="arrow arrow-right-1">→</div>
+            </div>
+
+            <div class="stage">
+                <div class="stage-header">
+                    <div class="stage-number">2</div>
+                    <div class="stage-title">Testing</div>
+                </div>
+                <div class="stage-content">
+                    <div class="description">Multi-environment validation</div>
+                    <ul class="highlights">
+                        <li><strong>Pytest</strong> + coverage (90%+)</li>
+                        <li>CPU & CUDA variants</li>
+                        <li>Rerun flaky tests (3x)</li>
+                        <li>Parallel execution</li>
+                    </ul>
+                </div>
+                <div class="arrow arrow-right-2">→</div>
+            </div>
+
+            <div class="stage wide">
+                <div class="stage-header">
+                    <div class="stage-number">3</div>
+                    <div class="stage-title">Dependencies & Vulnerabilities</div>
+                </div>
+                <div class="stage-content">
+                    <div class="description">Security-first dependency management</div>
+                    <ul class="highlights">
+                        <li><strong>Poetry</strong> lock validation & audit</li>
+                        <li><strong>pip-audit</strong> CVE detection</li>
+                        <li><strong>Safety</strong> vulnerability database</li>
+                        <li><strong>Trivy</strong> filesystem scan + secrets</li>
+                        <li>Adaptive gating (±3 HIGH, ±1 CRITICAL)</li>
+                        <li>Delta comparison vs baseline</li>
+                    </ul>
+                </div>
+                <div class="arrow arrow-down-1">↓</div>
+                <div class="conditional-label">if confidence > 0.9</div>
+            </div>
+
+            <!-- Row 2 -->
+            <div class="stage ai-powered">
+                <div class="stage-header">
+                    <div class="stage-number">4</div>
+                    <div class="stage-title">AI Triage</div>
+                    <span class="badge ai-badge">🤖 AI</span>
+                    <span class="badge new-badge">NEW</span>
+                </div>
+                <div class="stage-content">
+                    <div class="description">Claude-powered error analysis</div>
+                    <ul class="highlights">
+                        <li><strong>Root cause</strong> grouping</li>
+                        <li><strong>Flaky test</strong> detection</li>
+                        <li><strong>Confidence scores</strong> (0-1)</li>
+                        <li>Coverage & complexity analysis</li>
+                        <li>Structured triage report</li>
+                        <li>Actionable fix recommendations</li>
+                    </ul>
+                </div>
+                <div class="arrow arrow-right-1">→</div>
+            </div>
+
+            <div class="stage ai-powered">
+                <div class="stage-header">
+                    <div class="stage-number">5A</div>
+                    <div class="stage-title">Auto-Fix Agent</div>
+                    <span class="badge ai-badge">🔧 AI</span>
+                    <span class="badge new-badge">NEW</span>
+                </div>
+                <div class="stage-content">
+                    <div class="description">Autonomous code repair</div>
+                    <ul class="highlights">
+                        <li>Triggers @ 90%+ confidence</li>
+                        <li><strong>Auto-creates PR</strong> with fix</li>
+                        <li>Includes explanation & tests</li>
+                        <li>Labels: autofix-bot, needs-review</li>
+                    </ul>
+                </div>
+                <div class="arrow arrow-right-2">→</div>
+            </div>
+
+            <div class="stage ai-powered">
+                <div class="stage-header">
+                    <div class="stage-number">5B</div>
+                    <div class="stage-title">PR Feedback</div>
+                    <span class="badge ai-badge">💬 AI</span>
+                    <span class="badge new-badge">NEW</span>
+                </div>
+                <div class="stage-content">
+                    <div class="description">AI-generated summaries</div>
+                    <ul class="highlights">
+                        <li><strong>Concise</strong> issue summaries</li>
+                        <li>Actionable next steps</li>
+                        <li>Auto-posts to PR</li>
+                        <li>Status indicators + emoji</li>
+                    </ul>
+                </div>
+                <div class="arrow arrow-right-1">→</div>
+            </div>
+
+            <div class="stage">
+                <div class="stage-header">
+                    <div class="stage-number">6</div>
+                    <div class="stage-title">Security Scan</div>
+                </div>
+                <div class="stage-content">
+                    <div class="description">CodeQL & architecture</div>
+                    <ul class="highlights">
+                        <li><strong>CodeQL</strong> security queries</li>
+                        <li><strong>pydeps</strong> circular deps</li>
+                        <li>AI architecture health report</li>
+                        <li>SARIF → GitHub Security</li>
+                    </ul>
+                </div>
+                <div class="arrow arrow-down-2">↓</div>
+            </div>
+
+            <!-- Row 3 -->
+            <div class="stage wide">
+                <div class="stage-header">
+                    <div class="stage-number">7</div>
+                    <div class="stage-title">Docker Build & Attestation</div>
+                </div>
+                <div class="stage-content">
+                    <div class="description">Secure multi-arch container builds</div>
+                    <ul class="highlights">
+                        <li><strong>Multi-arch:</strong> CPU + CUDA variants (linux/amd64)</li>
+                        <li><strong>BuildKit caching</strong> for speed</li>
+                        <li><strong>Trivy + Grype</strong> image scanning</li>
+                        <li><strong>SBOM:</strong> SPDX + CycloneDX formats</li>
+                        <li><strong>Cosign keyless signing</strong> (OIDC)</li>
+                        <li>Build provenance attestation → GHCR</li>
+                    </ul>
+                </div>
+                <div class="arrow arrow-right-1">→</div>
+            </div>
+
+            <div class="stage ai-powered wide">
+                <div class="stage-header">
+                    <div class="stage-number">8</div>
+                    <div class="stage-title">Metrics & Observability</div>
+                    <span class="badge ai-badge">📊 AI</span>
+                    <span class="badge new-badge">NEW</span>
+                </div>
+                <div class="stage-content">
+                    <div class="description">CI performance tracking & AI trend analysis</div>
+                    <ul class="highlights">
+                        <li><strong>KPIs:</strong> Build time, flake rate, coverage, confidence scores</li>
+                        <li><strong>Datadog</strong> real-time metrics + <strong>Prometheus</strong> gateway</li>
+                        <li><strong>Daily AI insights:</strong> Trend analysis & recommendations</li>
+                        <li>Auto-updates quality_metrics.json baseline on main</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <div class="legend">
+                <div class="legend-item">
+                    <div class="legend-box"></div>
+                    <span>Traditional CI/CD</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-box ai"></div>
+                    <span>AI-Augmented Stage</span>
+                </div>
+                <div class="legend-item">
+                    <span style="color: #48bb78; font-weight: 700;">●</span>
+                    <span>New Feature</span>
+                </div>
+            </div>
+            <div class="metrics">
+                <div class="metric">
+                    <div class="metric-value">&lt;15min</div>
+                    <div class="metric-label">Build Time</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value">&lt;5%</div>
+                    <div class="metric-label">Flake Rate</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value">&gt;90%</div>
+                    <div class="metric-label">Coverage</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value">&gt;70%</div>
+                    <div class="metric-label">Auto-Fix Accuracy</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value">&lt;7d</div>
+                    <div class="metric-label">Vuln MTTR</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
