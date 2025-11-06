@@ -122,7 +122,11 @@ class ForensicLogger:
                 ).hexdigest()
             line = json.dumps(record, ensure_ascii=False)
             if self.path.exists() and self.path.stat().st_size + len(line) + 1 > self._max_bytes:
-                rotated = self.path.with_name(self.path.stem + f"-{int(time.time())}.log")
+                ts = int(time.time())
+                rotated = self.path.with_name(self.path.stem + f"-{ts}.log")
+                while rotated.exists():
+                    ts += 1
+                    rotated = self.path.with_name(self.path.stem + f"-{ts}.log")
                 self.path.rename(rotated)
                 prev_file_last_hash = self._load_last_hash_from(rotated)
                 self._prev_hash = "GENESIS"

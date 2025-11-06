@@ -126,8 +126,9 @@ class ActivationLogger:
         key = layer
         with self._lock:
             stats = self._stats.setdefault(key, ActivationStats())
-            stats.update(mean)
-            baseline_mean, baseline_std = stats.mean, stats.std
+            prev_count = stats.count
+            prev_mean = stats.mean
+            prev_std = stats.std
             # Simple rate limit per key
             now = time.time()
             rl_attr = getattr(stats, "_last_log_ts", 0.0)
@@ -137,9 +138,26 @@ class ActivationLogger:
                 allow = (now - rl_attr) >= min_dt
             if allow:
                 stats._last_log_ts = now
+            stats.update(mean)
+            baseline_mean, baseline_std = stats.mean, stats.std
 
-        z = 0.0 if baseline_std == 0.0 else abs(mean - baseline_mean) / baseline_std
-        anomalous = z > self.z_threshold or max_val > (baseline_mean + 10 * (baseline_std or 1.0))
+        enough_history = prev_count >= 2
+        if enough_history:
+            if prev_std > 0.0:
+                z = abs(mean - prev_mean) / prev_std
+            else:
+                z = float("inf") if mean != prev_mean else 0.0
+        else:
+            z = 0.0
+        threshold_mean = prev_mean if prev_count > 0 else baseline_mean
+        if prev_std > 0.0:
+            threshold_std = prev_std
+        elif baseline_std > 0.0:
+            threshold_std = baseline_std
+        else:
+            threshold_std = 1.0
+        limit = threshold_mean + 10 * threshold_std
+        anomalous = (enough_history and z > self.z_threshold) or (max_val > limit)
         if allow:
             self._record(
                 layer,

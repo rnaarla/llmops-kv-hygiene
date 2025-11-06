@@ -49,7 +49,8 @@ def prune_rotated_logs(
 
     # Count-based pruning (keep newest N)
     if max_rotated is not None and max_rotated >= 0 and len(rotated) > max_rotated:
-        to_remove = rotated[:-max_rotated]
+        keep = max_rotated
+        to_remove = rotated if keep == 0 else rotated[:-keep]
         for p in to_remove:
             if archive_dir:
                 archive_dir.mkdir(parents=True, exist_ok=True)
