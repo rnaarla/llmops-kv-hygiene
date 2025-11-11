@@ -13,6 +13,7 @@ np = opt.numpy()
 def _make_buf(size: int = 8):
     if np is None:
         pytest.skip("NumPy not available")
+    assert np is not None
     arr = np.arange(size, dtype="float32") + 1.0  # ensure non-zero
     return SimpleNamespace(_tensor=arr, device="cpu", nbytes=arr.nbytes)
 
