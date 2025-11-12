@@ -380,11 +380,14 @@ jobs:
           echo "Tests still failing after rerun. Marking job as failed."
           exit 1
 
+      # Upload artifacts even if tests failed - we need coverage data!
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: coverage-${{ matrix.os }}-${{ matrix.python-version }}
           path: reports/coverage.xml
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: coverage-raw-${{ matrix.os }}-${{ matrix.python-version }}
           path: reports/coverage.json
@@ -422,7 +425,10 @@ jobs:
             --coverage-min 99.9 --unsanitized-max 0 --quarantine-max 0 \
             --out forensics/verdict.json
           cat forensics/verdict.json
+      
+      # Upload all reports and forensics even if previous steps failed
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: reports-and-forensics-${{ matrix.os }}-${{ matrix.python-version }}
           path: |
@@ -437,11 +443,13 @@ jobs:
       baseline_pct: ${{ steps.baseline.outputs.pct }}
     steps:
       - uses: actions/checkout@v4
+      
+      # Download all coverage artifacts - each matrix job uploads separately
       - uses: actions/download-artifact@v4
         with:
           path: coverage_artifacts
-          pattern: coverage-*
-          merge-multiple: true
+          pattern: coverage-raw-*
+          merge-multiple: false  # Keep each matrix job's coverage separate!
 
       # === ADAPTIVE QUALITY GATING: Load Historical Baseline ===
       - name: Load coverage baseline
