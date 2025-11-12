@@ -8,7 +8,7 @@ def test_intentional_failure():
     - AI triage should detect this failure
     - AI should analyze the error
     - If confidence > 90%, auto-fix should create a PR
-    
+
     FIX: Change the line below from 'actual = 41' to 'actual = 42'
     """
     expected = 42
@@ -20,7 +20,7 @@ def test_intentional_failure():
 
 def test_another_intentional_failure():
     """Another failing test with a clear fix.
-    
+
     FIX: Change the assertion from '== 5' to '== 4'
     """
     result = calculate_sum(2, 2)
@@ -30,11 +30,11 @@ def test_another_intentional_failure():
 
 def test_obvious_typo():
     """Test with an obvious typo in variable name.
-    
+
     FIX: Change 'mesage' to 'message'
     """
-    mesage = "Hello, World!"  # BUG: Typo - should be 'message'
-    assert message == "Hello, World!"  # This will fail due to typo above
+    mesage = "Hello, World!"  # BUG: Typo - should be 'message'  # noqa: F841
+    assert message == "Hello, World!"  # This will fail due to typo above  # noqa: F821
 
 
 def calculate_sum(a: int, b: int) -> int:
