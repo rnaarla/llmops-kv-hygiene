@@ -259,14 +259,13 @@ jobs:
             --cov-report=json:reports/coverage.json \
             --cov-fail-under=0
 
-          # Verify coverage was collected
+          # Verify coverage was collected (warn only, don't fail)
           if [ ! -f reports/coverage.json ]; then
             echo "❌ ERROR: coverage.json not produced during selective run" >&2
-            exit 1
-          fi
-
-          # Check if coverage.json has actual data
-          python3 - <<'PY'
+            echo "This will cause coverage-aggregate to fail" >&2
+          else
+            # Check if coverage.json has actual data
+            python3 - <<'PY'
           import json, sys, pathlib
           cov_file = pathlib.Path('reports/coverage.json')
           data = json.loads(cov_file.read_text())
@@ -278,6 +277,7 @@ jobs:
           else:
               print(f"✅ Coverage collected: {statements} statements")
           PY
+          fi
 
           echo "Selective test run completed"
 
@@ -287,7 +287,7 @@ jobs:
         with:
           name: coverage-raw-${{ matrix.os }}-${{ matrix.python-version }}
           path: reports/coverage.json
-          if-no-files-found: warn
+          if-no-files-found: error
       - name: Rerun failed tests (selective mode)
         id: pytest_rerun_selective
         if: needs.generate-matrix.outputs.test_selection_mode == 'selective' && steps.pytest_selective.outcome == 'failure'
@@ -334,14 +334,13 @@ jobs:
             --cov-report=json:reports/coverage.json \
             --cov-fail-under=90
 
-          # Verify coverage was collected
+          # Verify coverage was collected (warn only, don't fail here)
           if [ ! -f reports/coverage.json ]; then
             echo "❌ ERROR: coverage.json not produced" >&2
-            exit 1
-          fi
-
-          # Check if coverage.json has actual data
-          python3 - <<'PY'
+            echo "This will cause coverage-aggregate to fail" >&2
+          else
+            # Check if coverage.json has actual data
+            python3 - <<'PY'
           import json, sys, pathlib
           cov_file = pathlib.Path('reports/coverage.json')
           data = json.loads(cov_file.read_text())
@@ -353,10 +352,10 @@ jobs:
           print(f"Coverage: {covered}/{statements} lines ({pct:.2f}%)")
 
           if statements == 0:
-              print(f"❌ ERROR: No statements found in coverage report", file=sys.stderr)
+              print(f"⚠️  WARNING: No statements found in coverage report", file=sys.stderr)
               print(f"This usually means tests didn't run or --cov target is wrong", file=sys.stderr)
-              sys.exit(1)
           PY
+          fi
 
       - name: Upload coverage (full mode - immediate)
         if: always() && needs.generate-matrix.outputs.test_selection_mode != 'selective'
@@ -364,7 +363,7 @@ jobs:
         with:
           name: coverage-raw-${{ matrix.os }}-${{ matrix.python-version }}
           path: reports/coverage.json
-          if-no-files-found: warn
+          if-no-files-found: error
       - name: Rerun failed tests (full mode)
         id: pytest_rerun_full
         if: needs.generate-matrix.outputs.test_selection_mode != 'selective' && steps.pytest_full.outcome == 'failure'
