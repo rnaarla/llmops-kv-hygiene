@@ -328,6 +328,64 @@ jobs:
           path: aggregate-coverage.json
 
   # ===========================================================================
+  # PHASE 3.5: Meta Testing & Chaos Validation
+  # ===========================================================================
+  meta-self-test:
+    name: Meta Self Test
+    needs: coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download aggregate coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: aggregate-coverage
+          path: meta_self_test
+        continue-on-error: true
+
+      - name: Download raw coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: meta_self_test/raw
+          pattern: coverage-*
+          merge-multiple: true
+        continue-on-error: true
+
+      - name: Validate coverage reproducibility
+        run: |
+          python tools/meta_self_test.py \
+            --aggregate meta_self_test/aggregate-coverage.json \
+            --artifacts meta_self_test/raw
+
+  chaos-validation:
+    name: Chaos Validation
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install runtime dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run chaos simulation
+        run: |
+          export PYTHONPATH="$PYTHONPATH:$(pwd)"
+          python tools/chaos_validation.py
+
+  # ===========================================================================
   # PHASE 4: Security Scanning
   # ===========================================================================
   security-scan:
