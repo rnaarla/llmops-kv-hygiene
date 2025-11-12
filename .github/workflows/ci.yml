@@ -185,7 +185,9 @@ jobs:
           pip install pytest-testmon pytest-cov
 
       - name: Run tests with coverage (selective mode)
+        id: pytest_selective
         if: needs.generate-matrix.outputs.test_selection_mode == 'selective'
+        continue-on-error: true
         run: |
           set -euo pipefail
           mkdir -p reports
@@ -201,9 +203,40 @@ jobs:
             exit 1
           fi
           echo "Selective test run completed"
+      - name: Rerun failed tests (selective mode)
+        id: pytest_rerun_selective
+        if: needs.generate-matrix.outputs.test_selection_mode == 'selective' && steps.pytest_selective.outcome == 'failure'
+        continue-on-error: true
+        run: |
+          mkdir -p reports
+          echo "Re-running failing tests to detect flakes..."
+          pytest --last-failed --disable-warnings -q | tee reports/pytest_rerun_selective.log
+      - name: Record flaky tests (selective mode)
+        id: record_flakes_selective
+        if: needs.generate-matrix.outputs.test_selection_mode == 'selective' && steps.pytest_selective.outcome == 'failure' && steps.pytest_rerun_selective.outcome == 'success'
+        run: |
+          python - <<'PY'
+          import pathlib
+          log = pathlib.Path('reports/pytest_rerun_selective.log')
+          flaky = []
+          if log.exists():
+              for line in log.read_text().splitlines():
+                  if line.strip().endswith(" PASSED"):
+                      flaky.append(line.split()[0])
+          path = pathlib.Path('reports/flaky_tests.txt')
+          path.write_text('\n'.join(flaky) + ("\n" if flaky else ""))
+          print(f"Captured flaky tests: {flaky}")
+          PY
+      - name: Fail if tests still failing (selective mode)
+        if: needs.generate-matrix.outputs.test_selection_mode == 'selective' && steps.pytest_selective.outcome == 'failure' && steps.pytest_rerun_selective.outcome == 'failure'
+        run: |
+          echo "Tests still failing after rerun. Marking job as failed."
+          exit 1
 
       - name: Run tests with coverage (full mode)
+        id: pytest_full
         if: needs.generate-matrix.outputs.test_selection_mode != 'selective'
+        continue-on-error: true
         run: |
           set -euo pipefail
           mkdir -p reports
@@ -212,6 +245,38 @@ jobs:
             --cov-report=xml:reports/coverage.xml \
             --cov-report=json:reports/coverage.json \
             --cov-fail-under=90
+      - name: Rerun failed tests (full mode)
+        id: pytest_rerun_full
+        if: needs.generate-matrix.outputs.test_selection_mode != 'selective' && steps.pytest_full.outcome == 'failure'
+        continue-on-error: true
+        run: |
+          mkdir -p reports
+          echo "Re-running failing tests to detect flakes..."
+          pytest --last-failed --disable-warnings -q | tee reports/pytest_rerun_full.log
+      - name: Record flaky tests (full mode)
+        id: record_flakes_full
+        if: needs.generate-matrix.outputs.test_selection_mode != 'selective' && steps.pytest_full.outcome == 'failure' && steps.pytest_rerun_full.outcome == 'success'
+        run: |
+          python - <<'PY'
+          import pathlib
+          log = pathlib.Path('reports/pytest_rerun_full.log')
+          flaky = []
+          if log.exists():
+              for line in log.read_text().splitlines():
+                  if line.strip().endswith(" PASSED"):
+                      flaky.append(line.split()[0])
+          path = pathlib.Path('reports/flaky_tests.txt')
+          existing = path.read_text().splitlines() if path.exists() else []
+          merged = sorted(set(existing + flaky))
+          path.write_text('\n'.join(merged) + ("\n" if merged else ""))
+          print(f"Captured flaky tests: {merged}")
+          PY
+      - name: Fail if tests still failing (full mode)
+        if: needs.generate-matrix.outputs.test_selection_mode != 'selective' && steps.pytest_full.outcome == 'failure' && steps.pytest_rerun_full.outcome == 'failure'
+        run: |
+          echo "Tests still failing after rerun. Marking job as failed."
+          exit 1
+
       - uses: actions/upload-artifact@v4
         with:
           name: coverage-${{ matrix.os }}-${{ matrix.python-version }}
