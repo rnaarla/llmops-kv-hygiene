@@ -216,22 +216,22 @@ jobs:
           echo "=== Python environment ==="
           python --version
           pip --version
-          
+
           echo -e "\n=== pytest version ==="
           pytest --version || echo "❌ pytest not found!"
-          
+
           echo -e "\n=== pytest-cov version ==="
           python -c "import pytest_cov; print(f'pytest-cov {pytest_cov.__version__}')" || echo "❌ pytest-cov not found!"
-          
+
           echo -e "\n=== Test discovery (first 20) ==="
           pytest --collect-only -q | head -20 || echo "❌ Test collection failed!"
-          
+
           echo -e "\n=== Test count ==="
           pytest --collect-only -q | wc -l || echo "0"
-          
+
           echo -e "\n=== Tools directory contents ==="
           ls -la tools/ | head -10
-          
+
           echo -e "\n=== Tools __init__.py exists? ==="
           test -f tools/__init__.py && echo "✅ Yes" || echo "❌ No"
 
@@ -257,13 +257,13 @@ jobs:
             --cov-report=xml:reports/coverage.xml \
             --cov-report=json:reports/coverage.json \
             --cov-fail-under=0
-          
+
           # Verify coverage was collected
           if [ ! -f reports/coverage.json ]; then
             echo "❌ ERROR: coverage.json not produced during selective run" >&2
             exit 1
           fi
-          
+
           # Check if coverage.json has actual data
           python3 - <<'PY'
           import json, sys, pathlib
@@ -277,8 +277,16 @@ jobs:
           else:
               print(f"✅ Coverage collected: {statements} statements")
           PY
-          
+
           echo "Selective test run completed"
+
+      - name: Upload coverage (selective mode - immediate)
+        if: always() && needs.generate-matrix.outputs.test_selection_mode == 'selective'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-raw-${{ matrix.os }}-${{ matrix.python-version }}
+          path: reports/coverage.json
+          if-no-files-found: warn
       - name: Rerun failed tests (selective mode)
         id: pytest_rerun_selective
         if: needs.generate-matrix.outputs.test_selection_mode == 'selective' && steps.pytest_selective.outcome == 'failure'
@@ -316,7 +324,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p reports
-          
+
           # Run pytest with coverage
           pytest --maxfail=1 --disable-warnings -q \
             --randomly-seed=133742 \
@@ -324,13 +332,13 @@ jobs:
             --cov-report=xml:reports/coverage.xml \
             --cov-report=json:reports/coverage.json \
             --cov-fail-under=90
-          
+
           # Verify coverage was collected
           if [ ! -f reports/coverage.json ]; then
             echo "❌ ERROR: coverage.json not produced" >&2
             exit 1
           fi
-          
+
           # Check if coverage.json has actual data
           python3 - <<'PY'
           import json, sys, pathlib
@@ -340,14 +348,22 @@ jobs:
           statements = totals.get('num_statements', 0)
           covered = totals.get('covered_lines', 0)
           pct = (covered / statements * 100) if statements > 0 else 0
-          
+
           print(f"Coverage: {covered}/{statements} lines ({pct:.2f}%)")
-          
+
           if statements == 0:
               print(f"❌ ERROR: No statements found in coverage report", file=sys.stderr)
               print(f"This usually means tests didn't run or --cov target is wrong", file=sys.stderr)
               sys.exit(1)
           PY
+
+      - name: Upload coverage (full mode - immediate)
+        if: always() && needs.generate-matrix.outputs.test_selection_mode != 'selective'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-raw-${{ matrix.os }}-${{ matrix.python-version }}
+          path: reports/coverage.json
+          if-no-files-found: warn
       - name: Rerun failed tests (full mode)
         id: pytest_rerun_full
         if: needs.generate-matrix.outputs.test_selection_mode != 'selective' && steps.pytest_full.outcome == 'failure'
@@ -386,11 +402,6 @@ jobs:
         with:
           name: coverage-${{ matrix.os }}-${{ matrix.python-version }}
           path: reports/coverage.xml
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: coverage-raw-${{ matrix.os }}-${{ matrix.python-version }}
-          path: reports/coverage.json
       - name: Generate metrics JSON and verify HMAC chain
         env:
           FORENSIC_HMAC_SECRET: ci-secret
@@ -425,7 +436,7 @@ jobs:
             --coverage-min 99.9 --unsanitized-max 0 --quarantine-max 0 \
             --out forensics/verdict.json
           cat forensics/verdict.json
-      
+
       # Upload all reports and forensics even if previous steps failed
       - uses: actions/upload-artifact@v4
         if: always()
@@ -443,7 +454,7 @@ jobs:
       baseline_pct: ${{ steps.baseline.outputs.pct }}
     steps:
       - uses: actions/checkout@v4
-      
+
       # Download all coverage artifacts - each matrix job uploads separately
       - uses: actions/download-artifact@v4
         with:
@@ -474,14 +485,14 @@ jobs:
         run: |
           python3 - <<'PY'
           import json, pathlib, sys, os
-          
+
           coverage_dir = pathlib.Path('coverage_artifacts')
           files = list(coverage_dir.rglob('coverage.json'))
-          
+
           print(f"Found {len(files)} coverage.json files")
           for f in files:
               print(f"  - {f}")
-          
+
           if not files:
               print("❌ ERROR: No coverage.json files found in artifacts!", file=sys.stderr)
               print(f"Contents of {coverage_dir}:", file=sys.stderr)
@@ -489,10 +500,10 @@ jobs:
                   for item in coverage_dir.rglob('*'):
                       print(f"  {item}", file=sys.stderr)
               sys.exit(1)
-          
+
           total_covered=0
           total_statements=0
-          
+
           for fp in files:
               try:
                   data=json.loads(fp.read_text())
@@ -504,10 +515,10 @@ jobs:
                   print(f"  {fp.name}: {covered}/{statements} lines")
               except Exception as e:
                   print(f"⚠️  WARNING: Failed to parse {fp}: {e}", file=sys.stderr)
-          
+
           pct = (total_covered/total_statements*100) if total_statements else 0.0
           print(f'\nAggregated coverage: {total_covered}/{total_statements} lines = {pct:.2f}%')
-          
+
           if total_statements == 0:
               print(f"❌ ERROR: Total statements is 0! Tests may not have run.", file=sys.stderr)
               sys.exit(1)
