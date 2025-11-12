@@ -96,10 +96,8 @@ jobs:
 
           serialized = json.dumps(changed)
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write("files<<EOF\n")
-              f.write(serialized)
-              f.write("\nEOF\n")
-              f.write(f"mode={mode}\n")
+              print(f"files={serialized}", file=f)
+              print(f"mode={mode}", file=f)
 
           print(f"Test selection mode: {mode}")
           PY
@@ -1085,9 +1083,14 @@ jobs:
 
   ci_metrics:
     name: CI Metrics Collection and Analysis
-    needs: [lint, test, coverage-aggregate, ai_triage]
+    needs:
+      - lint
+      - test
+      - coverage-aggregate
+      - ai_triage
+      - docker-images
     runs-on: ubuntu-latest
-    if: always()
+    if: ${{ always() && (github.event_name == 'pull_request' || needs['docker-images'].result == 'success' || needs['docker-images'].result == 'skipped') }}
     permissions:
       contents: write
     timeout-minutes: 10
