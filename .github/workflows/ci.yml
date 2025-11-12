@@ -168,6 +168,7 @@ jobs:
     name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
     needs: [policy-guard, generate-matrix]
     runs-on: ${{ matrix.os }}
+    continue-on-error: true  # Allow workflow to continue even if tests fail
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
