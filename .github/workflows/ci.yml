@@ -57,12 +57,33 @@ jobs:
       - name: Run Mypy
         run: mypy tools tests
 
+  policy-guard:
+    name: Policy Validation
+    needs: lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Conftest
+        run: |
+          set -euo pipefail
+          VERSION="0.45.0"
+          curl -sSL -o conftest.tar.gz "https://github.com/open-policy-agent/conftest/releases/download/v${VERSION}/conftest_${VERSION}_Linux_x86_64.tar.gz"
+          tar -xzf conftest.tar.gz
+          sudo mv conftest /usr/local/bin/conftest
+          conftest --version
+
+      - name: Evaluate policies
+        run: conftest test .github/workflows/ci.yml -p policy
+
   # ===========================================================================
   # PHASE 2: Testing with Coverage
   # ===========================================================================
   test:
     name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
-    needs: lint
+    needs: policy-guard
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
