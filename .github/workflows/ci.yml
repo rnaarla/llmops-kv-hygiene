@@ -231,10 +231,27 @@ jobs:
             --cov-report=xml:reports/coverage.xml \
             --cov-report=json:reports/coverage.json \
             --cov-fail-under=0
+          
+          # Verify coverage was collected
           if [ ! -f reports/coverage.json ]; then
-            echo "❌ coverage.json not produced during selective run" >&2
+            echo "❌ ERROR: coverage.json not produced during selective run" >&2
             exit 1
           fi
+          
+          # Check if coverage.json has actual data
+          python3 - <<'PY'
+          import json, sys, pathlib
+          cov_file = pathlib.Path('reports/coverage.json')
+          data = json.loads(cov_file.read_text())
+          totals = data.get('totals', {})
+          statements = totals.get('num_statements', 0)
+          if statements == 0:
+              print(f"⚠️  WARNING: No statements found in coverage report", file=sys.stderr)
+              print(f"Coverage data: {data}", file=sys.stderr)
+          else:
+              print(f"✅ Coverage collected: {statements} statements")
+          PY
+          
           echo "Selective test run completed"
       - name: Rerun failed tests (selective mode)
         id: pytest_rerun_selective
@@ -273,12 +290,38 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p reports
+          
+          # Run pytest with coverage
           pytest --maxfail=1 --disable-warnings -q \
             --randomly-seed=133742 \
             --cov=tools --cov-report=term-missing \
             --cov-report=xml:reports/coverage.xml \
             --cov-report=json:reports/coverage.json \
             --cov-fail-under=90
+          
+          # Verify coverage was collected
+          if [ ! -f reports/coverage.json ]; then
+            echo "❌ ERROR: coverage.json not produced" >&2
+            exit 1
+          fi
+          
+          # Check if coverage.json has actual data
+          python3 - <<'PY'
+          import json, sys, pathlib
+          cov_file = pathlib.Path('reports/coverage.json')
+          data = json.loads(cov_file.read_text())
+          totals = data.get('totals', {})
+          statements = totals.get('num_statements', 0)
+          covered = totals.get('covered_lines', 0)
+          pct = (covered / statements * 100) if statements > 0 else 0
+          
+          print(f"Coverage: {covered}/{statements} lines ({pct:.2f}%)")
+          
+          if statements == 0:
+              print(f"❌ ERROR: No statements found in coverage report", file=sys.stderr)
+              print(f"This usually means tests didn't run or --cov target is wrong", file=sys.stderr)
+              sys.exit(1)
+          PY
       - name: Rerun failed tests (full mode)
         id: pytest_rerun_full
         if: needs.generate-matrix.outputs.test_selection_mode != 'selective' && steps.pytest_full.outcome == 'failure'
@@ -395,17 +438,45 @@ jobs:
       - name: Combine coverage
         id: calc
         run: |
-          python - <<'PY'
+          python3 - <<'PY'
           import json, pathlib, sys, os
-          files = list(pathlib.Path('coverage_artifacts').rglob('coverage.json'))
-          total_covered=0; total_statements=0
+          
+          coverage_dir = pathlib.Path('coverage_artifacts')
+          files = list(coverage_dir.rglob('coverage.json'))
+          
+          print(f"Found {len(files)} coverage.json files")
+          for f in files:
+              print(f"  - {f}")
+          
+          if not files:
+              print("❌ ERROR: No coverage.json files found in artifacts!", file=sys.stderr)
+              print(f"Contents of {coverage_dir}:", file=sys.stderr)
+              if coverage_dir.exists():
+                  for item in coverage_dir.rglob('*'):
+                      print(f"  {item}", file=sys.stderr)
+              sys.exit(1)
+          
+          total_covered=0
+          total_statements=0
+          
           for fp in files:
-              data=json.loads(fp.read_text())
-              totals = data.get('totals') or {}
-              total_covered += totals.get('covered_lines',0)
-              total_statements += totals.get('num_statements',0)
+              try:
+                  data=json.loads(fp.read_text())
+                  totals = data.get('totals') or {}
+                  covered = totals.get('covered_lines', 0)
+                  statements = totals.get('num_statements', 0)
+                  total_covered += covered
+                  total_statements += statements
+                  print(f"  {fp.name}: {covered}/{statements} lines")
+              except Exception as e:
+                  print(f"⚠️  WARNING: Failed to parse {fp}: {e}", file=sys.stderr)
+          
           pct = (total_covered/total_statements*100) if total_statements else 0.0
-          print(f'Aggregated coverage: {pct:.2f}%')
+          print(f'\nAggregated coverage: {total_covered}/{total_statements} lines = {pct:.2f}%')
+          
+          if total_statements == 0:
+              print(f"❌ ERROR: Total statements is 0! Tests may not have run.", file=sys.stderr)
+              sys.exit(1)
 
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
               f.write(f"pct={pct:.2f}\n")
@@ -416,6 +487,8 @@ jobs:
               json.dump({'coverage': pct, 'covered': total_covered, 'statements': total_statements}, f)
 
           # Initial pass/fail (will be refined by adaptive gate)
+          if pct < 90.0:
+              print(f"⚠️  Coverage {pct:.2f}% is below 90% threshold")
           sys.exit(0 if pct >= 90.0 else 2)
           PY
 
