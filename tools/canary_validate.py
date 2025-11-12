@@ -14,8 +14,23 @@ def load_metrics(path: pathlib.Path) -> dict:
 
 
 def assert_canary_health(metrics: dict, min_coverage: float = 90.0) -> None:
-    coverage = float(metrics["metrics"].get("coverage_pct", 0.0))
-    flake_score = float(metrics["metrics"].get("flake_recovery_score", 1.0))
+    # Handle both nested "metrics" key and direct structure
+    metrics_data = metrics.get("metrics", metrics)
+
+    # Try to get coverage from different possible locations
+    coverage = 0.0
+    if "coverage_pct" in metrics_data:
+        coverage = float(metrics_data.get("coverage_pct", 0.0))
+    elif "coverage" in metrics_data:
+        # Handle quality_metrics.json structure with coverage.current
+        cov_data = metrics_data.get("coverage", {})
+        if isinstance(cov_data, dict):
+            coverage = float(cov_data.get("current", 0.0))
+        else:
+            coverage = float(cov_data)
+
+    flake_score = float(metrics_data.get("flake_recovery_score", 1.0))
+
     if coverage < min_coverage:
         raise AssertionError(
             f"Canary health gate failed: coverage {coverage:.2f}% < {min_coverage}%"
@@ -34,8 +49,21 @@ def main() -> None:
 
     metrics = load_metrics(pathlib.Path(args.metrics))
     assert_canary_health(metrics, args.min_coverage)
-    coverage_pct = float(metrics["metrics"].get("coverage_pct", 0.0))
-    flake_score = float(metrics["metrics"].get("flake_recovery_score", 1.0))
+
+    # Extract coverage for display (handle both structures)
+    metrics_data = metrics.get("metrics", metrics)
+    coverage_pct = 0.0
+    if "coverage_pct" in metrics_data:
+        coverage_pct = float(metrics_data.get("coverage_pct", 0.0))
+    elif "coverage" in metrics_data:
+        cov_data = metrics_data.get("coverage", {})
+        if isinstance(cov_data, dict):
+            coverage_pct = float(cov_data.get("current", 0.0))
+        else:
+            coverage_pct = float(cov_data)
+
+    flake_score = float(metrics_data.get("flake_recovery_score", 1.0))
+
     print(
         "✅ Canary validation succeeded:"
         f" coverage={coverage_pct:.2f}%"
