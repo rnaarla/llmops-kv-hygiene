@@ -160,11 +160,34 @@ jobs:
           black --version || true
           mypy --version || true
 
+  policy-guard:
+    name: Policy Validation
+    needs: lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Conftest
+        run: |
+          set -euo pipefail
+          VERSION="0.45.0"
+          curl -sSL -o conftest.tar.gz "https://github.com/open-policy-agent/conftest/releases/download/v${VERSION}/conftest_${VERSION}_Linux_x86_64.tar.gz"
+          tar -xzf conftest.tar.gz
+          sudo mv conftest /usr/local/bin/conftest
+          conftest --version
+      - name: Evaluate policies
+        run: conftest test .github/workflows/ci.yml -p policy
+
   test:
-    needs: [lint, generate-matrix]
+    needs: [policy-guard, generate-matrix]
     strategy:
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
+    env:
+      PYTHONHASHSEED: '0'
+      HYPOTHESIS_SEED: '133742'
+      PYTEST_RANDOMLY_SEED: '133742'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -194,6 +217,7 @@ jobs:
           # pytest-testmon tracks dependencies and runs only affected tests
           pytest --maxfail=1 --disable-warnings -q \
             --testmon --testmon-noselect \
+            --randomly-seed=133742 \
             --cov=tools --cov-report=term-missing \
             --cov-report=xml:reports/coverage.xml \
             --cov-report=json:reports/coverage.json \
@@ -210,7 +234,7 @@ jobs:
         run: |
           mkdir -p reports
           echo "Re-running failing tests to detect flakes..."
-          pytest --last-failed --disable-warnings -q | tee reports/pytest_rerun_selective.log
+          pytest --last-failed --disable-warnings -q --randomly-seed=133742 | tee reports/pytest_rerun_selective.log
       - name: Record flaky tests (selective mode)
         id: record_flakes_selective
         if: needs.generate-matrix.outputs.test_selection_mode == 'selective' && steps.pytest_selective.outcome == 'failure' && steps.pytest_rerun_selective.outcome == 'success'
@@ -241,6 +265,7 @@ jobs:
           set -euo pipefail
           mkdir -p reports
           pytest --maxfail=1 --disable-warnings -q \
+            --randomly-seed=133742 \
             --cov=tools --cov-report=term-missing \
             --cov-report=xml:reports/coverage.xml \
             --cov-report=json:reports/coverage.json \
@@ -252,7 +277,7 @@ jobs:
         run: |
           mkdir -p reports
           echo "Re-running failing tests to detect flakes..."
-          pytest --last-failed --disable-warnings -q | tee reports/pytest_rerun_full.log
+          pytest --last-failed --disable-warnings -q --randomly-seed=133742 | tee reports/pytest_rerun_full.log
       - name: Record flaky tests (full mode)
         id: record_flakes_full
         if: needs.generate-matrix.outputs.test_selection_mode != 'selective' && steps.pytest_full.outcome == 'failure' && steps.pytest_rerun_full.outcome == 'success'
@@ -424,13 +449,58 @@ jobs:
           name: coverage-aggregate
           path: reports/coverage_aggregate.json
 
+  meta-self-test:
+    name: Meta Self Test
+    needs: coverage-aggregate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage-aggregate
+          path: meta_self_test
+        continue-on-error: true
+      - uses: actions/download-artifact@v4
+        with:
+          path: meta_self_test/raw
+          pattern: coverage-*
+          merge-multiple: true
+        continue-on-error: true
+      - name: Validate coverage reproducibility
+        run: |
+          python tools/meta_self_test.py \
+            --aggregate meta_self_test/coverage_aggregate.json \
+            --artifacts meta_self_test/raw
+
+  chaos-validation:
+    name: Chaos Validation
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install runtime dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run chaos simulation
+        run: python tools/chaos_validation.py
+
   # =============================================================================
   # === AI-AUGMENTED QUALITY AND TRIAGE STAGE ===
   # =============================================================================
 
   ai_triage:
     name: AI-Assisted Error Triage and Analysis
-    needs: [lint, test, coverage-aggregate]
+    needs: [lint, test, coverage-aggregate, meta-self-test, chaos-validation]
     runs-on: ubuntu-latest
     if: always()  # Run even if previous jobs fail
     timeout-minutes: 10
@@ -1018,6 +1088,19 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - name: Download test artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ci_artifacts
+          pattern: reports-and-forensics-*
+          merge-multiple: true
+        continue-on-error: true
+      - name: Download SBOM metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: sbom
+          path: ci_artifacts/sbom
+        continue-on-error: true
 
       - name: Calculate CI metrics
         id: metrics
@@ -1031,6 +1114,21 @@ jobs:
           current_time = datetime.utcnow()
 
           # Collect metrics
+          artifacts_root = pathlib.Path('ci_artifacts')
+          flaky_file = artifacts_root / 'reports' / 'flaky_tests.txt'
+          sbom_hash_path = artifacts_root / 'sbom' / 'reports' / 'sbom_hash.txt'
+
+          flake_count = 0
+          flake_score = 1.0
+          if flaky_file.exists():
+              flakes = [line.strip() for line in flaky_file.read_text().splitlines() if line.strip()]
+              flake_count = len(flakes)
+              flake_score = 0.8 if flake_count else 1.0
+
+          sbom_hash = ''
+          if sbom_hash_path.exists():
+              sbom_hash = sbom_hash_path.read_text().strip()
+
           metrics = {
               'timestamp': current_time.isoformat(),
               'workflow_run_id': "${{ github.run_id }}",
@@ -1042,7 +1140,10 @@ jobs:
                   'coverage_pct': float("${{ needs.coverage-aggregate.outputs.coverage_pct }}" or "0"),
                   'ai_fix_confidence': float("${{ needs.ai_triage.outputs.fix_confidence }}" or "0"),
                   'has_flaky_tests': "${{ needs.ai_triage.outputs.has_flaky_tests }}" == "true",
-                  'rerun_count': int("${{ github.run_attempt }}") - 1
+                  'rerun_count': int("${{ github.run_attempt }}") - 1,
+                  'flake_count': flake_count,
+                  'flake_recovery_score': flake_score,
+                  'sbom_hash': sbom_hash or ""
               },
               'job_statuses': {
                   'lint': "${{ needs.lint.result }}",
@@ -1240,8 +1341,15 @@ jobs:
           history = history[-10:]
           avg_coverage = sum(h['coverage'] for h in history) / len(history)
 
+          baseline.setdefault('coverage', {})
+          baseline.setdefault('sbom', {})
+
           baseline['coverage']['baseline'] = avg_coverage
           baseline['coverage']['current'] = current_coverage
+          sbom_hash = current['metrics'].get('sbom_hash', '')
+          if sbom_hash:
+              baseline['sbom']['baseline_hash'] = sbom_hash
+              baseline['sbom']['current_hash'] = sbom_hash
           baseline['history'] = history
           baseline['last_updated'] = datetime.utcnow().isoformat()
 
@@ -1393,7 +1501,7 @@ jobs:
 
   docker-images:
     name: Build and push Docker images (CPU + CUDA)
-    needs: coverage-aggregate
+    needs: [coverage-aggregate, meta-self-test]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
@@ -1401,6 +1509,9 @@ jobs:
       packages: write
       security-events: write
       id-token: write
+    outputs:
+      image_repo: ${{ steps.prep.outputs.repo }}
+      image_sha: ${{ steps.prep.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
       - name: Pre-build disk cleanup
@@ -1615,6 +1726,41 @@ jobs:
           json.dump({'counts':counts,'stage':'post-sbom'}, open('vuln-summary.json','w'), indent=2)
           print('Final aggregated vulnerability counts:', counts)
           PY
+      - name: SBOM drift check
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+
+          pathlib.Path('reports').mkdir(exist_ok=True)
+
+          repo = pathlib.Path('ci_metrics/quality_metrics.json')
+          baseline_hash = ""
+          if repo.exists():
+              data = json.loads(repo.read_text())
+              baseline_hash = data.get('sbom', {}).get('baseline_hash', "")
+
+          sha = "${{ steps.prep.outputs.sha }}"
+          paths = [
+              pathlib.Path(f"sbom-cpu-{sha}.spdx.json"),
+              pathlib.Path(f"sbom-cuda-{sha}.spdx.json"),
+          ]
+          hashes = []
+          for path in paths:
+              if path.exists():
+                  hashes.append(hashlib.sha256(path.read_bytes()).hexdigest())
+          if not hashes:
+              print("⚠️  No SBOM files found; skipping drift check.")
+              sys.exit(0)
+          combined = hashlib.sha256("".join(hashes).encode()).hexdigest()
+          pathlib.Path("reports/sbom_hash.txt").write_text(combined)
+          print(f"SBOM combined hash: {combined}")
+          if baseline_hash and combined != baseline_hash:
+              print(f"❌ SBOM drift detected. Baseline hash {baseline_hash}")
+              sys.exit(1)
+          PY
       - name: Vulnerability threshold gate (images)
         if: env.VULN_GATING == '1'
         run: |
@@ -1658,6 +1804,14 @@ jobs:
           chmod +x cosign
           sudo mv cosign /usr/local/bin/cosign
           cosign version
+      - name: Install SLSA verifier
+        run: |
+          set -euo pipefail
+          VERSION="v2.4.0"
+          curl -sSL -o slsa-verifier.tar.gz "https://github.com/slsa-framework/slsa-verifier/releases/download/${VERSION}/slsa-verifier-linux-amd64.tar.gz"
+          tar -xzf slsa-verifier.tar.gz
+          sudo mv slsa-verifier-linux-amd64 /usr/local/bin/slsa-verifier
+          slsa-verifier version
       - name: Sign images (keyless)
         env:
           COSIGN_EXPERIMENTAL: 'true'
@@ -1683,6 +1837,16 @@ jobs:
         with:
           subject-name: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
           subject-digest: ${{ steps.build_cuda.outputs.digest }}
+      - name: Verify SLSA provenance (CPU)
+        run: |
+          slsa-verifier verify-image ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }} \
+            --source-uri github.com/${{ github.repository }} \
+            --source-tag ${{ github.ref }}
+      - name: Verify SLSA provenance (CUDA)
+        run: |
+          slsa-verifier verify-image ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }} \
+            --source-uri github.com/${{ github.repository }} \
+            --source-tag ${{ github.ref }}
       - name: Upload SBOM artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -1693,10 +1857,11 @@ jobs:
             grype-*.json
             vuln-summary*.json
             trivy-*.json
+            reports/sbom_hash.txt
 
   docker-scan-pr:
     name: Scan Docker images for PRs (no push)
-    needs: coverage-aggregate
+    needs: [coverage-aggregate, meta-self-test]
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     permissions:
@@ -1859,6 +2024,41 @@ jobs:
           image: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
           output-file: sbom-cuda-pr-${{ steps.prep.outputs.sha }}.spdx.json
           format: spdx-json
+      - name: SBOM drift check (PR)
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+
+          pathlib.Path('reports').mkdir(exist_ok=True)
+
+          baseline_file = pathlib.Path('ci_metrics/quality_metrics.json')
+          baseline_hash = ""
+          if baseline_file.exists():
+              data = json.loads(baseline_file.read_text())
+              baseline_hash = data.get('sbom', {}).get('baseline_hash', "")
+
+          sha = "${{ steps.prep.outputs.sha }}"
+          paths = [
+              pathlib.Path(f"sbom-cpu-pr-{sha}.spdx.json"),
+              pathlib.Path(f"sbom-cuda-pr-{sha}.spdx.json"),
+          ]
+          hashes = []
+          for path in paths:
+              if path.exists():
+                  hashes.append(hashlib.sha256(path.read_bytes()).hexdigest())
+          if not hashes:
+              print("⚠️  No SBOM files located for PR scan.")
+              sys.exit(0)
+          combined = hashlib.sha256("".join(hashes).encode()).hexdigest()
+          pathlib.Path("reports/sbom_hash_pr.txt").write_text(combined)
+          print(f"PR SBOM combined hash: {combined}")
+          if baseline_hash and combined != baseline_hash:
+              print(f"❌ SBOM drift detected relative to baseline {baseline_hash}")
+              sys.exit(1)
+          PY
       - name: Upload SBOM artifacts (PR)
         uses: actions/upload-artifact@v4
         with:
@@ -1867,3 +2067,37 @@ jobs:
             sbom-*-pr-*.spdx.json
             trivy-*-pr.json
             vuln-summary-pr.json
+            reports/sbom_hash_pr.txt
+  canary-validation:
+    name: Canary Validation
+    needs: [docker-images, ci_metrics]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull canary image
+        run: |
+          docker pull ${{ needs.docker-images.outputs.image_repo }}:cpu-${{ needs.docker-images.outputs.image_sha }}
+      - name: Run container smoke check
+        run: |
+          docker run --rm ${{ needs.docker-images.outputs.image_repo }}:cpu-${{ needs.docker-images.outputs.image_sha }} \
+            python -c "import json; print(json.dumps({'status':'ok'}))"
+      - name: Download CI metrics
+        uses: actions/download-artifact@v4
+        with:
+          name: ci-metrics
+          path: canary_metrics
+        continue-on-error: true
+      - name: Evaluate telemetry
+        run: |
+          python tools/canary_validate.py \
+            --metrics canary_metrics/ci_metrics/run_metrics.json \
+            --min-coverage 90.0

@@ -7,6 +7,11 @@
     "high": 0,
     "critical": 0
   },
+<<<<<<< HEAD
+  "sbom": {
+    "baseline_hash": "",
+    "current_hash": ""
+  },
   "history": [
     {
       "timestamp": "2025-11-12T14:48:51.569085",
