@@ -1,12 +1,18 @@
 {
   "coverage": {
-    "baseline": 90.0,
-    "current": 90.0
+    "baseline": 92.46,
+    "current": 92.46
   },
   "vulnerabilities": {
     "high": 0,
     "critical": 0
   },
-  "history": [],
-  "last_updated": "2025-01-01T00:00:00Z"
+  "history": [
+    {
+      "timestamp": "2025-11-12T14:48:51.569085",
+      "coverage": 92.46,
+      "run_id": "19301325594"
+    }
+  ],
+  "last_updated": "2025-11-12T14:48:51.693705"
 }
