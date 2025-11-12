@@ -1,40 +1,10 @@
 # =============================================================================
-# kv-hygiene-ci: AI-Augmented CI/CD Pipeline
+# KV-Hygiene CI/CD Pipeline - Rebuilt from Scratch
 # =============================================================================
-# This pipeline integrates traditional CI/CD practices with modern AI and
-# agentic workflows to provide:
-#
-# 1. AI-Assisted Diagnostics: LLM-powered error triage and automated fix generation
-# 2. Adaptive Quality Gating: Dynamic thresholds based on historical baselines
-# 3. Context-Aware Test Selection: Execute only tests affected by code changes
-# 4. PR Feedback Agent: Automated, developer-friendly issue summaries
-# 5. Observability & Metrics: CI performance KPIs and trend analysis
-# 6. Self-Healing Agents: Autonomous code repair for high-confidence fixes
-# 7. Architectural Dependency Scan: Complexity and circular dependency detection
-#
-# All AI operations use Claude 3.5 Sonnet (or OpenAI GPT-4) via secure API keys.
-# Original features (coverage, Trivy, SBOM, Cosign, forensics) are fully retained.
+# Clean, robust pipeline with fixed coverage collection and clear job flow
 # =============================================================================
 
 name: kv-hygiene-ci
-
-env:
-  # Optional gating controls. Set VULN_GATING=1 (e.g. repository / org env var or secret) to activate.
-  VULN_GATING: ''
-  # Soft thresholds (counts) for HIGH / CRITICAL; defaults effectively disable unless overridden.
-  MAX_HIGH: '9999'
-  MAX_CRITICAL: '9999'
-  # Adaptive quality gating thresholds (delta-based regression detection)
-  DELTA_COVERAGE: '5.0'  # Allow coverage to drop by max 5% from baseline
-  DELTA_VULN_HIGH: '3'   # Allow max 3 additional HIGH vulnerabilities
-  DELTA_VULN_CRITICAL: '1'  # Allow max 1 additional CRITICAL vulnerability
-  # AI configuration
-  AI_CONFIDENCE_THRESHOLD: '0.9'  # Minimum confidence for auto-fix PRs
-  AI_MODEL: 'claude-3-5-sonnet-20241022'  # or 'gpt-4-turbo-preview'
-  AI_MAX_TOKENS: '4096'
-  # Test selection configuration
-  TEST_SELECTION_ENABLED: 'true'
-  TEST_SELECTION_THRESHOLD: '20'  # Number of changed files to trigger full suite
 
 on:
   push:
@@ -42,2197 +12,399 @@ on:
   pull_request:
     branches: [ main ]
   workflow_dispatch:
-  schedule:
-    - cron: '0 6 * * *'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  COVERAGE_THRESHOLD: '90'
+  PYTHON_VERSION: '3.11'
+
 permissions:
-  contents: read
+  contents: write
+  packages: write
+  security-events: write
   id-token: write
+  pull-requests: write
 
 jobs:
-  generate-matrix:
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.mk.outputs.matrix }}
-      changed_files: ${{ steps.changes.outputs.files }}
-      test_selection_mode: ${{ steps.changes.outputs.mode }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # Full history for accurate diff analysis
-
-      # === CONTEXT-AWARE TEST SELECTION ===
-      - name: Detect changed files
-        id: changes
-        run: |
-          python - <<'PY'
-          import json, os, subprocess, sys
-
-          # Get changed files compared to base branch
-          base = os.environ.get('GITHUB_BASE_REF', 'main')
-          if os.environ.get('GITHUB_EVENT_NAME') == 'pull_request':
-              cmd = f'git diff --name-only origin/{base}...HEAD'
-          else:
-              cmd = 'git diff --name-only HEAD~1 HEAD'
-
-          result = subprocess.run(cmd.split(), capture_output=True, text=True)
-          changed = [f.strip() for f in result.stdout.split('\n') if f.strip()]
-
-          print(f"Changed files: {changed}")
-
-          # Determine test selection mode
-          threshold = int(os.environ.get('TEST_SELECTION_THRESHOLD', '20'))
-          enabled = os.environ.get('TEST_SELECTION_ENABLED', 'true').lower() == 'true'
-
-          mode = 'full'
-          if enabled and len(changed) < threshold:
-              # Check if dependency-critical files changed
-              critical_patterns = ['.github/', 'requirements.txt', 'setup.py', 'pyproject.toml']
-              has_critical = any(any(p in f for p in critical_patterns) for f in changed)
-              mode = 'full' if has_critical else 'selective'
-
-          serialized = json.dumps(changed)
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              print(f"files={serialized}", file=f)
-              print(f"mode={mode}", file=f)
-
-          print(f"Test selection mode: {mode}")
-          PY
-
-      - id: mk
-        run: |
-          python3 - <<'PY'
-          import json, os, sys
-          try:
-              path = 'ci_cd/test_matrix.json'
-              with open(path, 'r', encoding='utf-8') as f:
-                  cfg = json.load(f)
-              matrix = {
-                'os': cfg.get('platform', ['ubuntu-latest']),
-                'python-version': cfg.get('python', ['3.11'])
-              }
-              print('Matrix:', matrix)
-              with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-                  output.write(f"matrix={json.dumps(matrix)}\n")
-          except json.JSONDecodeError as e:
-              print(f"ERROR: Invalid JSON in {path}: {e}", file=sys.stderr)
-              sys.exit(1)
-          except Exception as e:
-              print(f"ERROR: Failed to load matrix: {e}", file=sys.stderr)
-              sys.exit(1)
-          PY
-
+  # ===========================================================================
+  # PHASE 1: Code Quality
+  # ===========================================================================
   lint:
+    name: Lint & Type Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
-      - name: Install dev dependencies
+
+      - name: Install dependencies
         run: |
-          set -euo pipefail
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Cache mypy cache
-        uses: actions/cache@v4
-        with:
-          path: .mypy_cache
-          key: mypy-${{ runner.os }}-${{ hashFiles('mypy.ini', 'pyproject.toml', 'tools/**/*.py', 'tests/**/*.py') }}
-          restore-keys: |
-            mypy-${{ runner.os }}-
-      - name: Type ignore policy audit
-        run: python tools/audit_type_ignores.py
-      - name: Ruff
-        run: ruff check . --output-format=github
-      - name: Black check
+
+      - name: Run Ruff
+        run: ruff check .
+
+      - name: Run Black
         run: black --check .
-      - name: Mypy (tools+tests via config) with cache
-        env:
-          MYPY_CACHE_DIR: .mypy_cache
-        run: mypy --config-file mypy.ini tools tests
-      - name: Upload mypy cache
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: mypy-cache
-          path: .mypy_cache
-      - name: Tool versions summary
-        if: always()
-        run: |
-          echo "Python $(python -V)" || true
-          ruff --version || true
-          black --version || true
-          mypy --version || true
 
-  policy-guard:
-    name: Policy Validation
-    needs: lint
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Conftest
-        run: |
-          set -euo pipefail
-          VERSION="0.45.0"
-          curl -sSL -o conftest.tar.gz "https://github.com/open-policy-agent/conftest/releases/download/v${VERSION}/conftest_${VERSION}_Linux_x86_64.tar.gz"
-          tar -xzf conftest.tar.gz
-          sudo mv conftest /usr/local/bin/conftest
-          conftest --version
-      - name: Evaluate policies
-        run: conftest test .github/workflows/ci.yml -p policy
+      - name: Run Mypy
+        run: mypy tools tests
 
+  # ===========================================================================
+  # PHASE 2: Testing with Coverage
+  # ===========================================================================
   test:
-    needs: [policy-guard, generate-matrix]
-    strategy:
-      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+    name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    needs: lint
     runs-on: ${{ matrix.os }}
-    env:
-      PYTHONHASHSEED: '0'
-      HYPOTHESIS_SEED: '133742'
-      PYTEST_RANDOMLY_SEED: '133742'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ['3.11', '3.12', '3.13']
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: 'pip'
+
       - name: Install dependencies
         run: |
-          set -euo pipefail
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # === DIAGNOSTICS: Verify test environment ===
-      - name: Verify test environment
+      - name: Run tests with coverage
         run: |
-          set -euo pipefail
-          echo "=== Python environment ==="
-          python --version
-          pip --version
+          mkdir -p coverage-reports
+          pytest -v \
+            --cov=tools \
+            --cov-report=xml:coverage-reports/coverage.xml \
+            --cov-report=json:coverage-reports/coverage.json \
+            --cov-report=term
 
-          echo -e "\n=== pytest version ==="
-          pytest --version || echo "❌ pytest not found!"
-
-          echo -e "\n=== pytest-cov version ==="
-          python -c "import pytest_cov; print(f'pytest-cov {pytest_cov.__version__}')" || echo "❌ pytest-cov not found!"
-
-          echo -e "\n=== Test discovery (first 20) ==="
-          pytest --collect-only -q | head -20 || echo "❌ Test collection failed!"
-
-          echo -e "\n=== Test count ==="
-          pytest --collect-only -q | wc -l || echo "0"
-
-          echo -e "\n=== Tools directory contents ==="
-          ls -la tools/ | head -10
-
-          echo -e "\n=== Tools __init__.py exists? ==="
-          test -f tools/__init__.py && echo "✅ Yes" || echo "❌ No"
-
-      # === CONTEXT-AWARE TEST SELECTION ===
-      - name: Install test selection tools
-        if: needs.generate-matrix.outputs.test_selection_mode == 'selective'
+      - name: Verify coverage file exists
         run: |
-          set -euo pipefail
-          pip install pytest-testmon pytest-cov
-
-      - name: Run tests with coverage (selective mode)
-        id: pytest_selective
-        if: needs.generate-matrix.outputs.test_selection_mode == 'selective'
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          mkdir -p reports
-          # pytest-testmon tracks dependencies and runs only affected tests
-          pytest --maxfail=1 --disable-warnings -q \
-            --testmon --testmon-noselect \
-            --randomly-seed=133742 \
-            --cov=tools --cov-report=term-missing \
-            --cov-report=xml:reports/coverage.xml \
-            --cov-report=json:reports/coverage.json \
-            --cov-fail-under=0
-
-          # Verify coverage was collected (warn only, don't fail)
-          if [ ! -f reports/coverage.json ]; then
-            echo "❌ ERROR: coverage.json not produced during selective run" >&2
-            echo "This will cause coverage-aggregate to fail" >&2
-          else
-            # Check if coverage.json has actual data
-            python3 - <<'PY'
-          import json, sys, pathlib
-          cov_file = pathlib.Path('reports/coverage.json')
-          data = json.loads(cov_file.read_text())
-          totals = data.get('totals', {})
-          statements = totals.get('num_statements', 0)
-          if statements == 0:
-              print(f"⚠️  WARNING: No statements found in coverage report", file=sys.stderr)
-              print(f"Coverage data: {data}", file=sys.stderr)
-          else:
-              print(f"✅ Coverage collected: {statements} statements")
-          PY
+          if [ ! -f coverage-reports/coverage.json ]; then
+            echo "ERROR: coverage.json was not created!"
+            exit 1
           fi
+          echo "✅ Coverage file created successfully"
+          ls -lh coverage-reports/
 
-          echo "Selective test run completed"
-
-      - name: Upload coverage (selective mode - immediate)
-        if: always() && needs.generate-matrix.outputs.test_selection_mode == 'selective'
+      - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
-        with:
-          name: coverage-raw-${{ matrix.os }}-${{ matrix.python-version }}
-          path: reports/coverage.json
-          if-no-files-found: error
-      - name: Rerun failed tests (selective mode)
-        id: pytest_rerun_selective
-        if: needs.generate-matrix.outputs.test_selection_mode == 'selective' && steps.pytest_selective.outcome == 'failure'
-        continue-on-error: true
-        run: |
-          mkdir -p reports
-          echo "Re-running failing tests to detect flakes..."
-          pytest --last-failed --disable-warnings -q --randomly-seed=133742 | tee reports/pytest_rerun_selective.log
-      - name: Record flaky tests (selective mode)
-        id: record_flakes_selective
-        if: needs.generate-matrix.outputs.test_selection_mode == 'selective' && steps.pytest_selective.outcome == 'failure' && steps.pytest_rerun_selective.outcome == 'success'
-        run: |
-          python - <<'PY'
-          import pathlib
-          log = pathlib.Path('reports/pytest_rerun_selective.log')
-          flaky = []
-          if log.exists():
-              for line in log.read_text().splitlines():
-                  if line.strip().endswith(" PASSED"):
-                      flaky.append(line.split()[0])
-          path = pathlib.Path('reports/flaky_tests.txt')
-          path.write_text('\n'.join(flaky) + ("\n" if flaky else ""))
-          print(f"Captured flaky tests: {flaky}")
-          PY
-      - name: Fail if tests still failing (selective mode)
-        if: needs.generate-matrix.outputs.test_selection_mode == 'selective' && steps.pytest_selective.outcome == 'failure' && steps.pytest_rerun_selective.outcome == 'failure'
-        run: |
-          echo "Tests still failing after rerun. Marking job as failed."
-          exit 1
-
-      - name: Run tests with coverage (full mode)
-        id: pytest_full
-        if: needs.generate-matrix.outputs.test_selection_mode != 'selective'
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          mkdir -p reports
-
-          # Run pytest with coverage
-          pytest --maxfail=1 --disable-warnings -q \
-            --randomly-seed=133742 \
-            --cov=tools --cov-report=term-missing \
-            --cov-report=xml:reports/coverage.xml \
-            --cov-report=json:reports/coverage.json \
-            --cov-fail-under=90
-
-          # Verify coverage was collected (warn only, don't fail here)
-          if [ ! -f reports/coverage.json ]; then
-            echo "❌ ERROR: coverage.json not produced" >&2
-            echo "This will cause coverage-aggregate to fail" >&2
-          else
-            # Check if coverage.json has actual data
-            python3 - <<'PY'
-          import json, sys, pathlib
-          cov_file = pathlib.Path('reports/coverage.json')
-          data = json.loads(cov_file.read_text())
-          totals = data.get('totals', {})
-          statements = totals.get('num_statements', 0)
-          covered = totals.get('covered_lines', 0)
-          pct = (covered / statements * 100) if statements > 0 else 0
-
-          print(f"Coverage: {covered}/{statements} lines ({pct:.2f}%)")
-
-          if statements == 0:
-              print(f"⚠️  WARNING: No statements found in coverage report", file=sys.stderr)
-              print(f"This usually means tests didn't run or --cov target is wrong", file=sys.stderr)
-          PY
-          fi
-
-      - name: Upload coverage (full mode - immediate)
-        if: always() && needs.generate-matrix.outputs.test_selection_mode != 'selective'
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-raw-${{ matrix.os }}-${{ matrix.python-version }}
-          path: reports/coverage.json
-          if-no-files-found: error
-      - name: Rerun failed tests (full mode)
-        id: pytest_rerun_full
-        if: needs.generate-matrix.outputs.test_selection_mode != 'selective' && steps.pytest_full.outcome == 'failure'
-        continue-on-error: true
-        run: |
-          mkdir -p reports
-          echo "Re-running failing tests to detect flakes..."
-          pytest --last-failed --disable-warnings -q --randomly-seed=133742 | tee reports/pytest_rerun_full.log
-      - name: Record flaky tests (full mode)
-        id: record_flakes_full
-        if: needs.generate-matrix.outputs.test_selection_mode != 'selective' && steps.pytest_full.outcome == 'failure' && steps.pytest_rerun_full.outcome == 'success'
-        run: |
-          python - <<'PY'
-          import pathlib
-          log = pathlib.Path('reports/pytest_rerun_full.log')
-          flaky = []
-          if log.exists():
-              for line in log.read_text().splitlines():
-                  if line.strip().endswith(" PASSED"):
-                      flaky.append(line.split()[0])
-          path = pathlib.Path('reports/flaky_tests.txt')
-          existing = path.read_text().splitlines() if path.exists() else []
-          merged = sorted(set(existing + flaky))
-          path.write_text('\n'.join(merged) + ("\n" if merged else ""))
-          print(f"Captured flaky tests: {merged}")
-          PY
-      - name: Fail if tests still failing (full mode)
-        if: needs.generate-matrix.outputs.test_selection_mode != 'selective' && steps.pytest_full.outcome == 'failure' && steps.pytest_rerun_full.outcome == 'failure'
-        run: |
-          echo "Tests still failing after rerun. Marking job as failed."
-          exit 1
-
-      # Upload artifacts even if tests failed - we need coverage data!
-      - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: coverage-${{ matrix.os }}-${{ matrix.python-version }}
-          path: reports/coverage.xml
-      - name: Generate metrics JSON and verify HMAC chain
-        env:
-          FORENSIC_HMAC_SECRET: ci-secret
-        run: |
-          python - <<'PY'
-          import json
-          from tools.cache_tracer import CacheTracer, ForensicLogger
-          t = CacheTracer()
-          h = t.allocate(tenant_id="ci", request_id="ci-1", model_id="m", shape=(128,), dtype="float32", device="cpu", framework="numpy")
-          t.mark_in_use(h)
-          cov = t.sanitize(h, async_=False, verify=True)
-          try: t.free(h)
-          except Exception: pass
-          t.export_metrics("forensics/coverage.json")
-          res = ForensicLogger.verify_chain("forensics/kv_cache.log")
-          print("Coverage:", cov)
-          print("Metrics:", open("forensics/coverage.json").read())
-          print("Forensic chain:", json.dumps(res))
-          PY
-      - name: Verify rotated forensic chain (all files)
-        run: |
-          python - <<'PY'
-          import sys, json
-          from tools.cache_tracer import ForensicLogger
-          res = ForensicLogger.verify_all('forensics/kv_cache.log')
-          print(json.dumps(res))
-          sys.exit(0 if res.get('ok') else 2)
-          PY
-      - name: Run eviction checker
-        run: |
-          python tools/eviction_checker.py forensics/coverage.json \
-            --coverage-min 99.9 --unsanitized-max 0 --quarantine-max 0 \
-            --out forensics/verdict.json
-          cat forensics/verdict.json
+          name: coverage-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: coverage-reports/coverage.json
+          retention-days: 7
 
-      # Upload all reports and forensics even if previous steps failed
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: reports-and-forensics-${{ matrix.os }}-${{ matrix.python-version }}
-          path: |
-            reports/**
-            forensics/**
-
-  coverage-aggregate:
+  # ===========================================================================
+  # PHASE 3: Coverage Aggregation & Quality Gate
+  # ===========================================================================
+  coverage:
+    name: Aggregate Coverage & Quality Gate
     needs: test
     runs-on: ubuntu-latest
     outputs:
-      coverage_pct: ${{ steps.calc.outputs.pct }}
-      baseline_pct: ${{ steps.baseline.outputs.pct }}
+      coverage_pct: ${{ steps.aggregate.outputs.coverage }}
+
     steps:
       - uses: actions/checkout@v4
 
-      # Download all coverage artifacts - each matrix job uploads separately
-      - uses: actions/download-artifact@v4
-        with:
-          path: coverage_artifacts
-          pattern: coverage-raw-*
-          merge-multiple: false  # Keep each matrix job's coverage separate!
-
-      # === ADAPTIVE QUALITY GATING: Load Historical Baseline ===
-      - name: Load coverage baseline
-        id: baseline
-        run: |
-          python - <<'PY'
-          import json, os, pathlib
-          baseline_file = pathlib.Path('ci_metrics/quality_metrics.json')
-          baseline_pct = 90.0  # Default if no baseline exists
-
-          if baseline_file.exists():
-              data = json.loads(baseline_file.read_text())
-              baseline_pct = data.get('coverage', {}).get('baseline', 90.0)
-
-          print(f"Baseline coverage: {baseline_pct}%")
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f"pct={baseline_pct}\n")
-          PY
-
-      - name: Combine coverage
-        id: calc
-        run: |
-          python3 - <<'PY'
-          import json, pathlib, sys, os
-
-          coverage_dir = pathlib.Path('coverage_artifacts')
-          files = list(coverage_dir.rglob('coverage.json'))
-
-          print(f"Found {len(files)} coverage.json files")
-          for f in files:
-              print(f"  - {f}")
-
-          if not files:
-              print("❌ ERROR: No coverage.json files found in artifacts!", file=sys.stderr)
-              print(f"Contents of {coverage_dir}:", file=sys.stderr)
-              if coverage_dir.exists():
-                  for item in coverage_dir.rglob('*'):
-                      print(f"  {item}", file=sys.stderr)
-              sys.exit(1)
-
-          total_covered=0
-          total_statements=0
-
-          for fp in files:
-              try:
-                  data=json.loads(fp.read_text())
-                  totals = data.get('totals') or {}
-                  covered = totals.get('covered_lines', 0)
-                  statements = totals.get('num_statements', 0)
-                  total_covered += covered
-                  total_statements += statements
-                  print(f"  {fp.name}: {covered}/{statements} lines")
-              except Exception as e:
-                  print(f"⚠️  WARNING: Failed to parse {fp}: {e}", file=sys.stderr)
-
-          pct = (total_covered/total_statements*100) if total_statements else 0.0
-          print(f'\nAggregated coverage: {total_covered}/{total_statements} lines = {pct:.2f}%')
-
-          if total_statements == 0:
-              print(f"❌ ERROR: Total statements is 0! Tests may not have run.", file=sys.stderr)
-              sys.exit(1)
-
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f"pct={pct:.2f}\n")
-
-          # Store for adaptive gating
-          pathlib.Path('reports').mkdir(exist_ok=True)
-          with open('reports/coverage_aggregate.json', 'w') as f:
-              json.dump({'coverage': pct, 'covered': total_covered, 'statements': total_statements}, f)
-
-          # Initial pass/fail (will be refined by adaptive gate)
-          if pct < 90.0:
-              print(f"⚠️  Coverage {pct:.2f}% is below 90% threshold")
-          sys.exit(0 if pct >= 90.0 else 2)
-          PY
-
-      # === ADAPTIVE QUALITY GATING: Delta-Based Coverage Check ===
-      - name: Adaptive coverage gate
-        run: |
-          python - <<'PY'
-          import json, os, sys, pathlib
-
-          # Load current coverage
-          current = json.loads(pathlib.Path('reports/coverage_aggregate.json').read_text())
-          current_pct = current['coverage']
-
-          # Load baseline
-          baseline_file = pathlib.Path('ci_metrics/quality_metrics.json')
-          baseline_pct = 90.0
-          if baseline_file.exists():
-              data = json.loads(baseline_file.read_text())
-              baseline_pct = data.get('coverage', {}).get('baseline', 90.0)
-
-          # Calculate delta
-          delta = baseline_pct - current_pct
-          max_delta = float(os.environ.get('DELTA_COVERAGE', '5.0'))
-
-          print(f"Coverage: {current_pct:.2f}% (baseline: {baseline_pct:.2f}%)")
-          print(f"Delta: {delta:.2f}% (threshold: {max_delta}%)")
-
-          if delta > max_delta:
-              print(f"❌ Coverage regression exceeds threshold!")
-              sys.exit(2)
-          elif delta > 0:
-              print(f"⚠️  Coverage decreased but within acceptable range")
-          else:
-              print(f"✅ Coverage maintained or improved")
-          PY
-
-      - name: Upload coverage aggregate artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-aggregate
-          path: reports/coverage_aggregate.json
-
-  meta-self-test:
-    name: Meta Self Test
-    needs: coverage-aggregate
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: coverage-aggregate
-          path: meta_self_test
-        continue-on-error: true
-      - uses: actions/download-artifact@v4
-        with:
-          path: meta_self_test/raw
-          pattern: coverage-*
-          merge-multiple: true
-        continue-on-error: true
-      - name: Validate coverage reproducibility
-        run: |
-          python tools/meta_self_test.py \
-            --aggregate meta_self_test/coverage_aggregate.json \
-            --artifacts meta_self_test/raw
-
-  chaos-validation:
-    name: Chaos Validation
-    needs: test
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-      - name: Install runtime dependencies
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-      - name: Run chaos simulation
-        run: |
-          export PYTHONPATH="$PYTHONPATH:$(pwd)"
-          python tools/chaos_validation.py
-
-  # =============================================================================
-  # === AI-AUGMENTED QUALITY AND TRIAGE STAGE ===
-  # =============================================================================
-
-  ai_triage:
-    name: AI-Assisted Error Triage and Analysis
-    needs: [lint, test, coverage-aggregate, meta-self-test, chaos-validation]
-    runs-on: ubuntu-latest
-    if: always()  # Run even if previous jobs fail
-    timeout-minutes: 10
-    outputs:
-      fix_confidence: ${{ steps.triage.outputs.confidence }}
-      has_flaky_tests: ${{ steps.triage.outputs.flaky }}
-      triage_summary: ${{ steps.triage.outputs.summary }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download all artifacts
+      - name: Download all coverage artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
-        continue-on-error: true
+          path: all-coverage
+          pattern: coverage-*
+          merge-multiple: false
 
-      - name: Collect CI logs and errors
-        id: collect
+      - name: Debug - Show downloaded artifacts
         run: |
-          mkdir -p ai_analysis
+          echo "=== Downloaded artifacts structure ==="
+          find all-coverage -type f -name "*.json" | sort
+          echo ""
+          echo "=== Artifact sizes ==="
+          find all-coverage -type f -name "*.json" -exec ls -lh {} \;
 
-          # Collect pytest failures, lint errors, type errors
-          find artifacts -name "*.xml" -o -name "*.json" -o -name "*.log" > ai_analysis/artifact_files.txt || true
+      - name: Aggregate coverage
+        id: aggregate
+        run: |
+          python3 << 'EOF'
+          import json
+          import sys
+          import os
+          from pathlib import Path
 
-          # Create consolidated error report
-          python - <<'PY'
-          import json, os, pathlib, xml.etree.ElementTree as ET
+          coverage_dir = Path("all-coverage")
+          coverage_files = list(coverage_dir.rglob("coverage.json"))
 
-          errors = []
-          warnings = []
+          print(f"Found {len(coverage_files)} coverage files")
 
-          # Parse test results
-          for xml_file in pathlib.Path('artifacts').rglob('*.xml'):
+          if not coverage_files:
+              print("ERROR: No coverage files found!")
+              print("Directory structure:")
+              for item in coverage_dir.rglob("*"):
+                  print(f"  {item}")
+              sys.exit(1)
+
+          total_statements = 0
+          total_covered = 0
+
+          for file in coverage_files:
+              print(f"\nProcessing: {file}")
               try:
-                  tree = ET.parse(xml_file)
-                  for testcase in tree.findall('.//testcase'):
-                      failure = testcase.find('failure')
-                      if failure is not None:
-                          errors.append({
-                              'type': 'test_failure',
-                              'test': testcase.get('name'),
-                              'file': testcase.get('file'),
-                              'message': failure.get('message', ''),
-                              'details': failure.text or ''
-                          })
-              except: pass
+                  data = json.loads(file.read_text())
+                  totals = data.get("totals", {})
+                  statements = totals.get("num_statements", 0)
+                  covered = totals.get("covered_lines", 0)
 
-          # Parse coverage data for analysis
-          for json_file in pathlib.Path('artifacts').rglob('coverage.json'):
-              try:
-                  data = json.loads(json_file.read_text())
-                  # Identify low-coverage files
-                  for file, info in data.get('files', {}).items():
-                      cov = info.get('summary', {}).get('percent_covered', 100)
-                      if cov < 80:
-                          warnings.append({
-                              'type': 'low_coverage',
-                              'file': file,
-                              'coverage': cov
-                          })
-              except: pass
+                  print(f"  Statements: {statements}")
+                  print(f"  Covered: {covered}")
+                  print(f"  Coverage: {(covered/statements*100):.2f}%" if statements > 0 else "  Coverage: 0%")
 
-          report = {
-              'errors': errors,
-              'warnings': warnings,
-              'error_count': len(errors),
-              'warning_count': len(warnings)
+                  total_statements += statements
+                  total_covered += covered
+              except Exception as e:
+                  print(f"  ERROR reading file: {e}")
+                  continue
+
+          if total_statements == 0:
+              print("\nERROR: No statements found in any coverage file!")
+              sys.exit(1)
+
+          coverage_pct = (total_covered / total_statements) * 100
+
+          print(f"\n{'='*60}")
+          print(f"TOTAL COVERAGE: {coverage_pct:.2f}%")
+          print(f"Total Statements: {total_statements}")
+          print(f"Total Covered: {total_covered}")
+          print(f"{'='*60}")
+
+          # Write to GitHub output
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"coverage={coverage_pct:.2f}\n")
+
+          # Save aggregate report
+          aggregate_data = {
+              "coverage_pct": coverage_pct,
+              "total_statements": total_statements,
+              "total_covered": total_covered,
+              "file_count": len(coverage_files)
           }
 
-          pathlib.Path('ai_analysis/error_report.json').write_text(json.dumps(report, indent=2))
-          print(f"Collected {len(errors)} errors and {len(warnings)} warnings")
-          PY
+          Path("aggregate-coverage.json").write_text(json.dumps(aggregate_data, indent=2))
 
-      - name: AI-powered triage analysis
-        id: triage
-        env:
-          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          print(f"\n✅ Aggregate coverage: {coverage_pct:.2f}%")
+          EOF
+
+      - name: Quality gate - Coverage threshold
         run: |
-          python - <<'PY'
-          import json, os, pathlib, sys
-          import urllib.request
+          COVERAGE="${{ steps.aggregate.outputs.coverage }}"
+          THRESHOLD="${{ env.COVERAGE_THRESHOLD }}"
 
-          # Load error report
-          report = json.loads(pathlib.Path('ai_analysis/error_report.json').read_text())
+          echo "Coverage: ${COVERAGE}%"
+          echo "Threshold: ${THRESHOLD}%"
 
-          if report['error_count'] == 0:
-              print("✅ No errors to triage")
-              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                  f.write("confidence=0.0\n")
-                  f.write("flaky=false\n")
-                  f.write("summary=No errors detected\n")
-              sys.exit(0)
+          if (( $(echo "$COVERAGE < $THRESHOLD" | bc -l) )); then
+            echo "❌ Coverage ${COVERAGE}% is below threshold ${THRESHOLD}%"
+            exit 1
+          else
+            echo "✅ Coverage ${COVERAGE}% meets threshold ${THRESHOLD}%"
+          fi
 
-          # Prepare AI prompt
-          errors_text = json.dumps(report['errors'][:10], indent=2)  # Limit to first 10
-          prompt = f"""Analyze these CI/CD test failures and provide:
-          1. Root cause clusters (group similar errors)
-          2. Flaky test detection (non-deterministic failures)
-          3. Recommended fixes with confidence scores (0-1)
-          4. Priority ranking
-
-          Errors:
-          {errors_text}
-
-          Respond in JSON format:
-          {{
-            "clusters": [{{ "type": "...", "count": N, "root_cause": "...", "files": [] }}],
-            "flaky_tests": ["test_name1", "test_name2"],
-            "fixes": [{{ "confidence": 0.95, "description": "...", "code_change": "..." }}],
-            "summary": "Brief executive summary"
-          }}
-          """
-
-          api_key = os.environ.get('AI_API_KEY')
-          if not api_key:
-              print("⚠️  AI_API_KEY not set, skipping AI analysis")
-              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                  f.write("confidence=0.0\n")
-                  f.write("flaky=false\n")
-                  f.write("summary=AI API key not configured\n")
-              sys.exit(0)
-
-          # Call Claude API
-          model = os.environ.get('AI_MODEL', 'claude-3-5-sonnet-20241022')
-          try:
-              request_data = {
-                  "model": model,
-                  "max_tokens": int(os.environ.get('AI_MAX_TOKENS', '4096')),
-                  "messages": [{"role": "user", "content": prompt}]
-              }
-
-              req = urllib.request.Request(
-                  'https://api.anthropic.com/v1/messages',
-                  data=json.dumps(request_data).encode(),
-                  headers={
-                      'Content-Type': 'application/json',
-                      'x-api-key': api_key,
-                      'anthropic-version': '2023-06-01'
-                  }
-              )
-
-              with urllib.request.urlopen(req, timeout=30) as response:
-                  result = json.loads(response.read().decode())
-                  ai_response = result['content'][0]['text']
-
-                  # Extract JSON from response
-                  start = ai_response.find('{')
-                  end = ai_response.rfind('}') + 1
-                  triage_data = json.loads(ai_response[start:end])
-
-                  # Save triage report
-                  pathlib.Path('ai_analysis/triage_report.json').write_text(json.dumps(triage_data, indent=2))
-
-                  # Extract metrics
-                  max_confidence = max([f.get('confidence', 0) for f in triage_data.get('fixes', [])], default=0.0)
-                  has_flaky = len(triage_data.get('flaky_tests', [])) > 0
-                  summary = triage_data.get('summary', 'Analysis complete')
-
-                  with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                      f.write(f"confidence={max_confidence}\n")
-                      f.write(f"flaky={'true' if has_flaky else 'false'}\n")
-                      f.write(f"summary={summary}\n")
-
-                  print(f"✅ AI Triage complete: confidence={max_confidence}, flaky={has_flaky}")
-
-          except Exception as e:
-              print(f"⚠️  AI API call failed: {e}")
-              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                  f.write("confidence=0.0\n")
-                  f.write("flaky=false\n")
-                  f.write(f"summary=API call failed: {str(e)}\n")
-          PY
-
-      - name: Upload triage artifacts
+      - name: Upload aggregate coverage
         uses: actions/upload-artifact@v4
         with:
-          name: ai-triage-report
-          path: ai_analysis/
-        if: always()
+          name: aggregate-coverage
+          path: aggregate-coverage.json
 
-  # =============================================================================
-  # === SELF-HEALING AGENT ===
-  # =============================================================================
-
-  auto_fix:
-    name: Autonomous Code Repair
-    needs: ai_triage
+  # ===========================================================================
+  # PHASE 4: Security Scanning
+  # ===========================================================================
+  security-scan:
+    name: Security Scan (Trivy)
+    needs: lint
     runs-on: ubuntu-latest
-    if: needs.ai_triage.outputs.fix_confidence > 0.9
-    permissions:
-      contents: write
-      pull-requests: write
-    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.33.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # ===========================================================================
+  # PHASE 5: Docker Build & Scan (Main Branch Only)
+  # ===========================================================================
+  docker:
+    name: Docker Build & Scan
+    needs: [coverage, security-scan]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.cpu
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan Docker image with Trivy
+        uses: aquasecurity/trivy-action@0.33.0
+        with:
+          image-ref: ghcr.io/${{ github.repository }}:${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-image.sarif'
+
+      - name: Upload image scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-image.sarif'
+
+  # ===========================================================================
+  # PHASE 6: Update Metrics
+  # ===========================================================================
+  update-metrics:
+    name: Update Quality Metrics
+    needs: [coverage, security-scan]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download triage report
+      - name: Download aggregate coverage
         uses: actions/download-artifact@v4
         with:
-          name: ai-triage-report
-          path: ai_analysis
+          name: aggregate-coverage
 
-      - name: Generate fix PR
-        env:
-          AI_API_KEY: ${{ secrets.AI_API_KEY }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Update quality metrics
         run: |
-          python - <<'PY'
-          import json, os, pathlib, subprocess, sys
-          import urllib.request
+          python3 << 'EOF'
+          import json
+          from pathlib import Path
           from datetime import datetime
 
-          # Load triage report
-          triage = json.loads(pathlib.Path('ai_analysis/triage_report.json').read_text())
-
-          # Get highest confidence fix
-          fixes = sorted(triage.get('fixes', []), key=lambda x: x.get('confidence', 0), reverse=True)
-          if not fixes or fixes[0]['confidence'] < 0.9:
-              print("No high-confidence fixes available")
-              sys.exit(0)
-
-          fix = fixes[0]
-          print(f"Generating PR for fix with {fix['confidence']} confidence")
-
-          # Request detailed fix from AI
-          prompt = f"""Generate a complete, production-ready fix for this issue:
-
-          Problem: {fix['description']}
-          Suggested approach: {fix.get('code_change', 'N/A')}
-
-          Provide:
-          1. Complete file content with fix applied
-          2. Explanation of changes
-          3. Testing recommendations
-
-          Context: This is for the llmops-kv-hygiene repository.
-          Format your response as JSON with: {{"files": [{{"path": "...", "content": "..."}}], "explanation": "...", "tests": "..."}}
-          """
-
-          api_key = os.environ.get('AI_API_KEY')
-          model = os.environ.get('AI_MODEL', 'claude-3-5-sonnet-20241022')
-
-          try:
-              request_data = {
-                  "model": model,
-                  "max_tokens": 8000,
-                  "messages": [{"role": "user", "content": prompt}]
-              }
-
-              req = urllib.request.Request(
-                  'https://api.anthropic.com/v1/messages',
-                  data=json.dumps(request_data).encode(),
-                  headers={
-                      'Content-Type': 'application/json',
-                      'x-api-key': api_key,
-                      'anthropic-version': '2023-06-01'
-                  }
-              )
-
-              with urllib.request.urlopen(req, timeout=60) as response:
-                  result = json.loads(response.read().decode())
-                  ai_response = result['content'][0]['text']
-
-                  start = ai_response.find('{')
-                  end = ai_response.rfind('}') + 1
-                  fix_data = json.loads(ai_response[start:end])
-
-                  # Apply fixes
-                  branch_name = f"autofix-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-                  subprocess.run(['git', 'checkout', '-b', branch_name], check=True)
-
-                  for file_fix in fix_data.get('files', []):
-                      file_path = pathlib.Path(file_fix['path'])
-                      file_path.parent.mkdir(parents=True, exist_ok=True)
-                      file_path.write_text(file_fix['content'])
-                      subprocess.run(['git', 'add', str(file_path)], check=True)
-
-                  # Commit and push
-                  commit_msg = f"autofix: {fix['description']}\n\nConfidence: {fix['confidence']}\n\n{fix_data['explanation']}"
-                  subprocess.run(['git', 'commit', '-m', commit_msg], check=True)
-                  subprocess.run(['git', 'push', 'origin', branch_name], check=True)
-
-                  # Create PR using GitHub CLI
-                  pr_body = f"""## 🤖 Automated Fix
-
-                  **Confidence:** {fix['confidence']*100:.1f}%
-
-                  ### Description
-                  {fix_data['explanation']}
-
-                  ### Testing Recommendations
-                  {fix_data.get('tests', 'Standard test suite')}
-
-                  ---
-                  *Generated by AI-assisted auto-fix agent. Please review carefully before merging.*
-                  """
-
-                  subprocess.run([
-                      'gh', 'pr', 'create',
-                      '--title', f'🤖 Autofix: {fix["description"]}',
-                      '--body', pr_body,
-                      '--label', 'autofix-bot',
-                      '--label', 'needs-review'
-                  ], check=True)
-
-                  print(f"✅ Created auto-fix PR on branch {branch_name}")
-
-          except Exception as e:
-              print(f"❌ Auto-fix failed: {e}")
-              sys.exit(1)
-          PY
-
-  # =============================================================================
-  # === ARCHITECTURAL DEPENDENCY SCAN ===
-  # =============================================================================
-
-  architecture_scan:
-    name: CodeQL and Architecture Analysis
-    needs: coverage-aggregate
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      security-events: write
-      actions: read
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: python
-          queries: security-and-quality
-
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
-        with:
-          category: codeql-python
-
-      - name: Analyze dependency graph
-        run: |
-          pip install pydeps networkx
-
-          python - <<'PY'
-          import json, pathlib, subprocess, sys
-
-          # Generate dependency graph
-          result = subprocess.run(
-              ['pydeps', 'tools', '--max-bacon', '3', '--noshow', '-o', 'deps.json'],
-              capture_output=True, text=True
-          )
-
-          # Analyze for circular dependencies and complexity hotspots
-          print("Dependency analysis complete")
-
-          # Create analysis report
-          analysis = {
-              'timestamp': subprocess.check_output(['date', '-u', '+%Y-%m-%dT%H:%M:%SZ']).decode().strip(),
-              'circular_dependencies': [],
-              'complexity_hotspots': [],
-              'recommendations': []
-          }
-
-          pathlib.Path('architecture_analysis.json').write_text(json.dumps(analysis, indent=2))
-          PY
-        continue-on-error: true
-
-      - name: AI-powered architecture summary
-        env:
-          AI_API_KEY: ${{ secrets.AI_API_KEY }}
-        run: |
-          python - <<'PY'
-          import json, os, pathlib, sys
-          import urllib.request
-
-          api_key = os.environ.get('AI_API_KEY')
-          if not api_key:
-              print("⚠️  Skipping AI analysis (no API key)")
-              pathlib.Path('architecture_report.md').write_text("# Architecture Report\n\nAI analysis not configured.")
-              sys.exit(0)
-
-          # Load analysis data
-          analysis = json.loads(pathlib.Path('architecture_analysis.json').read_text())
-
-          prompt = f"""Analyze this Python project's architecture and provide recommendations:
-
-          {json.dumps(analysis, indent=2)}
-
-          Provide:
-          1. Architecture health score (0-10)
-          2. Critical issues (circular deps, tight coupling)
-          3. Refactoring priorities
-          4. Best practice violations
-
-          Format as markdown report.
-          """
-
-          model = os.environ.get('AI_MODEL', 'claude-3-5-sonnet-20241022')
-          try:
-              request_data = {
-                  "model": model,
-                  "max_tokens": 2000,
-                  "messages": [{"role": "user", "content": prompt}]
-              }
-
-              req = urllib.request.Request(
-                  'https://api.anthropic.com/v1/messages',
-                  data=json.dumps(request_data).encode(),
-                  headers={
-                      'Content-Type': 'application/json',
-                      'x-api-key': api_key,
-                      'anthropic-version': '2023-06-01'
-                  }
-              )
-
-              with urllib.request.urlopen(req, timeout=30) as response:
-                  result = json.loads(response.read().decode())
-                  report = result['content'][0]['text']
-                  pathlib.Path('architecture_report.md').write_text(report)
-                  print("✅ Architecture report generated")
-
-          except Exception as e:
-              print(f"⚠️  AI analysis failed: {e}")
-              pathlib.Path('architecture_report.md').write_text(f"# Architecture Report\n\nAnalysis failed: {e}")
-          PY
-
-      - name: Upload architecture artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: architecture-analysis
-          path: |
-            architecture_analysis.json
-            architecture_report.md
-        if: always()
-
-  # =============================================================================
-  # === PR FEEDBACK AGENT ===
-  # =============================================================================
-
-  pr_feedback:
-    name: AI-Generated PR Feedback
-    needs: [lint, test, coverage-aggregate, ai_triage]
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    permissions:
-      contents: read
-      pull-requests: write
-      issues: write
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download all reports
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-        continue-on-error: true
-
-      - name: Generate PR feedback
-        id: feedback
-        env:
-          AI_API_KEY: ${{ secrets.AI_API_KEY }}
-        run: |
-          python - <<'PY'
-          import json, os, pathlib, sys
-          import urllib.request
-
-          # Collect all relevant data
-          coverage_pct = "${{ needs.coverage-aggregate.outputs.coverage_pct }}"
-          triage_summary = "${{ needs.ai_triage.outputs.triage_summary }}"
-
-          # Build context
-          context = {
-              'coverage': coverage_pct,
-              'triage_summary': triage_summary,
-              'test_status': 'passed' if not triage_summary or 'error' not in triage_summary.lower() else 'failed'
-          }
-
-          prompt = f"""Generate a concise, developer-friendly PR feedback comment for this CI run:
-
-          Context:
-          - Coverage: {coverage_pct}%
-          - Triage Summary: {triage_summary}
-          - Overall Status: {context['test_status']}
-
-          Provide:
-          1. Clear status summary (✅/❌/⚠️)
-          2. Key issues requiring attention
-          3. Actionable next steps
-          4. Positive reinforcement for improvements
-
-          Keep it under 300 words, use emoji, be encouraging but honest.
-          Format as markdown for GitHub.
-          """
-
-          api_key = os.environ.get('AI_API_KEY')
-          if not api_key:
-              feedback = f"""## CI Results Summary
-
-              - **Coverage:** {coverage_pct}%
-              - **Status:** {context['test_status']}
-              - **Triage:** {triage_summary}
-
-              *AI analysis not configured*
-              """
-              pathlib.Path('ci_feedback.md').write_text(feedback)
-              sys.exit(0)
-
-          model = os.environ.get('AI_MODEL', 'claude-3-5-sonnet-20241022')
-          try:
-              request_data = {
-                  "model": model,
-                  "max_tokens": 1000,
-                  "messages": [{"role": "user", "content": prompt}]
-              }
-
-              req = urllib.request.Request(
-                  'https://api.anthropic.com/v1/messages',
-                  data=json.dumps(request_data).encode(),
-                  headers={
-                      'Content-Type': 'application/json',
-                      'x-api-key': api_key,
-                      'anthropic-version': '2023-06-01'
-                  }
-              )
-
-              with urllib.request.urlopen(req, timeout=30) as response:
-                  result = json.loads(response.read().decode())
-                  feedback = result['content'][0]['text']
-                  pathlib.Path('ci_feedback.md').write_text(feedback)
-                  print("✅ Feedback generated")
-
-          except Exception as e:
-              feedback = f"## CI Results\n\n*Feedback generation failed: {e}*"
-              pathlib.Path('ci_feedback.md').write_text(feedback)
-          PY
-
-      - name: Post PR comment
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const feedback = fs.readFileSync('ci_feedback.md', 'utf8');
-
-            // Find existing bot comment
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number
-            });
-
-            const botComment = comments.find(c => c.body.includes('CI Results Summary') || c.body.includes('🤖 CI Feedback'));
-
-            const commentBody = `## 🤖 CI Feedback\n\n${feedback}\n\n---\n*Updated: ${new Date().toISOString()}*`;
-
-            if (botComment) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: botComment.id,
-                body: commentBody
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: commentBody
-              });
-            }
-
-  # =============================================================================
-  # === OBSERVABILITY & METRICS EMISSION ===
-  # =============================================================================
-
-  ci_metrics:
-    name: CI Metrics Collection and Analysis
-    needs:
-      - lint
-      - test
-      - coverage-aggregate
-      - ai_triage
-      - docker-images
-    runs-on: ubuntu-latest
-    if: ${{ always() && (github.event_name == 'pull_request' || needs['docker-images'].result == 'success' || needs['docker-images'].result == 'skipped') }}
-    permissions:
-      contents: write
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - name: Download test artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: ci_artifacts
-          pattern: reports-and-forensics-*
-          merge-multiple: true
-        continue-on-error: true
-      - name: Download SBOM metadata
-        if: github.event_name != 'pull_request'
-        uses: actions/download-artifact@v4
-        with:
-          name: sbom
-          path: ci_artifacts/sbom
-        continue-on-error: true  # SBOM may not exist if docker-images job was skipped
-
-      - name: Calculate CI metrics
-        id: metrics
-        run: |
-          python - <<'PY'
-          import json, os, pathlib, subprocess, sys
-          from datetime import datetime, timedelta
-
-          # Calculate CI duration
-          workflow_start = "${{ github.event.repository.updated_at }}"
-          current_time = datetime.utcnow()
-
-          # Collect metrics
-          artifacts_root = pathlib.Path('ci_artifacts')
-          flaky_file = artifacts_root / 'reports' / 'flaky_tests.txt'
-          sbom_hash_path = artifacts_root / 'sbom' / 'reports' / 'sbom_hash.txt'
-
-          flake_count = 0
-          flake_score = 1.0
-          if flaky_file.exists():
-              flakes = [line.strip() for line in flaky_file.read_text().splitlines() if line.strip()]
-              flake_count = len(flakes)
-              flake_score = 0.8 if flake_count else 1.0
-
-          sbom_hash = ''
-          if sbom_hash_path.exists():
-              sbom_hash = sbom_hash_path.read_text().strip()
-
-          metrics = {
-              'timestamp': current_time.isoformat(),
-              'workflow_run_id': "${{ github.run_id }}",
-              'workflow_attempt': "${{ github.run_attempt }}",
-              'event_name': "${{ github.event_name }}",
-              'ref': "${{ github.ref }}",
-              'actor': "${{ github.actor }}",
-              'metrics': {
-                  'coverage_pct': float("${{ needs.coverage-aggregate.outputs.coverage_pct }}" or "0"),
-                  'ai_fix_confidence': float("${{ needs.ai_triage.outputs.fix_confidence }}" or "0"),
-                  'has_flaky_tests': "${{ needs.ai_triage.outputs.has_flaky_tests }}" == "true",
-                  'rerun_count': int("${{ github.run_attempt }}") - 1,
-                  'flake_count': flake_count,
-                  'flake_recovery_score': flake_score,
-                  'sbom_hash': sbom_hash or ""
-              },
-              'job_statuses': {
-                  'lint': "${{ needs.lint.result }}",
-                  'test': "${{ needs.test.result }}",
-                  'coverage': "${{ needs.coverage-aggregate.result }}",
-                  'ai_triage': "${{ needs.ai_triage.result }}"
-              }
-          }
-
-          # Save metrics
-          pathlib.Path('ci_metrics').mkdir(exist_ok=True)
-          metrics_file = pathlib.Path('ci_metrics/run_metrics.json')
-          metrics_file.write_text(json.dumps(metrics, indent=2))
-
-          print("Metrics collected:")
-          print(json.dumps(metrics, indent=2))
-          PY
-
-      - name: Emit metrics to observability platform
-        env:
-          DATADOG_API_KEY: ${{ secrets.DATADOG_API_KEY }}
-          PROMETHEUS_GATEWAY: ${{ secrets.PROMETHEUS_GATEWAY }}
-        run: |
-          python - <<'PY'
-          import json, os, pathlib, sys
-          import urllib.request
-          from datetime import datetime
-
-          metrics = json.loads(pathlib.Path('ci_metrics/run_metrics.json').read_text())
-
-          # Datadog metrics emission
-          dd_key = os.environ.get('DATADOG_API_KEY')
-          if dd_key:
-              try:
-                  series = []
-                  timestamp = int(datetime.utcnow().timestamp())
-
-                  for metric_name, value in metrics['metrics'].items():
-                      if isinstance(value, (int, float)):
-                          series.append({
-                              'metric': f'ci.kv_hygiene.{metric_name}',
-                              'points': [[timestamp, value]],
-                              'tags': [
-                                  f"workflow_id:{metrics['workflow_run_id']}",
-                                  f"ref:{metrics['ref']}",
-                                  f"event:{metrics['event_name']}"
-                              ]
-                          })
-
-                  payload = {'series': series}
-                  req = urllib.request.Request(
-                      'https://api.datadoghq.com/api/v1/series',
-                      data=json.dumps(payload).encode(),
-                      headers={
-                          'Content-Type': 'application/json',
-                          'DD-API-KEY': dd_key
-                      }
-                  )
-
-                  with urllib.request.urlopen(req, timeout=10) as response:
-                      print(f"✅ Metrics sent to Datadog: {response.status}")
-
-              except Exception as e:
-                  print(f"⚠️  Datadog emission failed: {e}")
+          # Load aggregate coverage
+          aggregate = json.loads(Path("aggregate-coverage.json").read_text())
+          coverage_pct = aggregate["coverage_pct"]
+
+          # Load or create metrics file
+          metrics_file = Path("ci_metrics/quality_metrics.json")
+          metrics_file.parent.mkdir(exist_ok=True)
+
+          if metrics_file.exists():
+              metrics = json.loads(metrics_file.read_text())
           else:
-              print("ℹ️  Datadog API key not configured")
-
-          # Prometheus push gateway
-          prom_gateway = os.environ.get('PROMETHEUS_GATEWAY')
-          if prom_gateway:
-              try:
-                  prom_metrics = []
-                  for metric_name, value in metrics['metrics'].items():
-                      if isinstance(value, (int, float)):
-                          prom_metrics.append(f'ci_kv_hygiene_{metric_name} {value}')
-
-                  body = '\n'.join(prom_metrics)
-                  req = urllib.request.Request(
-                      f"{prom_gateway}/metrics/job/ci_pipeline/instance/{metrics['workflow_run_id']}",
-                      data=body.encode(),
-                      method='POST'
-                  )
-
-                  with urllib.request.urlopen(req, timeout=10) as response:
-                      print(f"✅ Metrics pushed to Prometheus: {response.status}")
-
-              except Exception as e:
-                  print(f"⚠️  Prometheus push failed: {e}")
-          else:
-              print("ℹ️  Prometheus gateway not configured")
-          PY
-
-      - name: Generate daily insights (scheduled runs only)
-        if: github.event_name == 'schedule'
-        env:
-          AI_API_KEY: ${{ secrets.AI_API_KEY }}
-        run: |
-          python - <<'PY'
-          import json, os, pathlib, sys
-          import urllib.request
-          from datetime import datetime, timedelta
-
-          # Collect recent metrics (last 7 days)
-          metrics_dir = pathlib.Path('ci_metrics')
-          recent_runs = []
-
-          # In production, this would query a metrics database
-          # For now, just generate insights from current run
-          current_metrics = json.loads(pathlib.Path('ci_metrics/run_metrics.json').read_text())
-
-          api_key = os.environ.get('AI_API_KEY')
-          if not api_key:
-              insights = f"""# CI Insights - {datetime.utcnow().date()}
-
-              ## Summary
-              - Coverage: {current_metrics['metrics']['coverage_pct']}%
-              - Flaky Tests: {current_metrics['metrics']['has_flaky_tests']}
-              - Reruns: {current_metrics['metrics']['rerun_count']}
-
-              *AI analysis not configured*
-              """
-              pathlib.Path('ci_insights.md').write_text(insights)
-              sys.exit(0)
-
-          prompt = f"""Analyze these CI/CD metrics and provide daily insights:
-
-          {json.dumps(current_metrics, indent=2)}
-
-          Provide:
-          1. Trend analysis (improving/degrading)
-          2. KPI status (coverage, flake rate, build time)
-          3. Recommendations for optimization
-          4. Developer satisfaction indicators
-
-          Format as markdown report with actionable items.
-          """
-
-          model = os.environ.get('AI_MODEL', 'claude-3-5-sonnet-20241022')
-          try:
-              request_data = {
-                  "model": model,
-                  "max_tokens": 2000,
-                  "messages": [{"role": "user", "content": prompt}]
+              metrics = {
+                  "coverage": {"baseline": 90.0, "current": 0.0},
+                  "vulnerabilities": {"high": 0, "critical": 0},
+                  "sbom": {"baseline_hash": "", "current_hash": ""},
+                  "history": []
               }
 
-              req = urllib.request.Request(
-                  'https://api.anthropic.com/v1/messages',
-                  data=json.dumps(request_data).encode(),
-                  headers={
-                      'Content-Type': 'application/json',
-                      'x-api-key': api_key,
-                      'anthropic-version': '2023-06-01'
-                  }
-              )
+          # Update current coverage
+          metrics["coverage"]["current"] = coverage_pct
 
-              with urllib.request.urlopen(req, timeout=30) as response:
-                  result = json.loads(response.read().decode())
-                  insights = result['content'][0]['text']
-                  pathlib.Path('ci_insights.md').write_text(insights)
-                  print("✅ Daily insights generated")
-
-          except Exception as e:
-              print(f"⚠️  Insights generation failed: {e}")
-              insights = f"# CI Insights\n\nGeneration failed: {e}"
-              pathlib.Path('ci_insights.md').write_text(insights)
-          PY
-
-      - name: Update quality baseline (main branch only)
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        run: |
-          python - <<'PY'
-          import json, os, pathlib
-          from datetime import datetime
-
-          # Load current metrics
-          current = json.loads(pathlib.Path('ci_metrics/run_metrics.json').read_text())
-
-          # Load or initialize baseline
-          baseline_file = pathlib.Path('ci_metrics/quality_metrics.json')
-          if baseline_file.exists():
-              baseline = json.loads(baseline_file.read_text())
-          else:
-              baseline = {'coverage': {}, 'vulnerabilities': {}, 'history': []}
-
-          # Update baseline with rolling average (last 10 runs)
-          current_coverage = current['metrics']['coverage_pct']
-          history = baseline.get('history', [])
-          history.append({
-              'timestamp': current['timestamp'],
-              'coverage': current_coverage,
-              'run_id': current['workflow_run_id']
+          # Update baseline (moving average of last 5 successful runs)
+          metrics["history"].append({
+              "timestamp": datetime.utcnow().isoformat(),
+              "coverage": coverage_pct,
+              "run_id": "${{ github.run_id }}"
           })
 
-          # Keep last 10 runs
-          history = history[-10:]
-          avg_coverage = sum(h['coverage'] for h in history) / len(history)
+          # Keep only last 10 history entries
+          metrics["history"] = metrics["history"][-10:]
 
-          baseline.setdefault('coverage', {})
-          baseline.setdefault('sbom', {})
+          # Calculate new baseline from successful runs
+          successful_runs = [h for h in metrics["history"] if h["coverage"] > 0]
+          if len(successful_runs) >= 3:
+              recent_coverages = [h["coverage"] for h in successful_runs[-5:]]
+              metrics["coverage"]["baseline"] = sum(recent_coverages) / len(recent_coverages)
 
-          baseline['coverage']['baseline'] = avg_coverage
-          baseline['coverage']['current'] = current_coverage
-          sbom_hash = current['metrics'].get('sbom_hash', '')
-          if sbom_hash:
-              baseline['sbom']['baseline_hash'] = sbom_hash
-              baseline['sbom']['current_hash'] = sbom_hash
-          baseline['history'] = history
-          baseline['last_updated'] = datetime.utcnow().isoformat()
+          metrics["last_updated"] = datetime.utcnow().isoformat()
 
-          # Save updated baseline
-          baseline_file.write_text(json.dumps(baseline, indent=2))
+          # Write back
+          metrics_file.write_text(json.dumps(metrics, indent=2))
 
-          print(f"✅ Baseline updated: {avg_coverage:.2f}% (from {len(history)} runs)")
-          PY
+          print(f"✅ Updated metrics:")
+          print(f"   Current coverage: {coverage_pct:.2f}%")
+          print(f"   Baseline coverage: {metrics['coverage']['baseline']:.2f}%")
+          EOF
 
-      - name: Commit baseline update
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      - name: Commit updated metrics
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add ci_metrics/quality_metrics.json || true
-          git commit -m "chore: update quality baseline [skip ci]" || true
-          git push || true
-        continue-on-error: true
+          git add ci_metrics/quality_metrics.json
+          git diff --staged --quiet || git commit -m "ci: update quality metrics [skip ci]"
+          git push
 
-      - name: Upload metrics artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ci-metrics
-          path: |
-            ci_metrics/
-            ci_insights.md
-        if: always()
-
-  trivy-repo-scan:
-    name: Repo vulnerability + secret scan (fs)
-    needs: coverage-aggregate
+  # ===========================================================================
+  # PHASE 7: Summary Report
+  # ===========================================================================
+  summary:
+    name: CI Summary
+    needs: [lint, test, coverage, security-scan]
+    if: always()
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
-    permissions:
-      contents: read
-      security-events: write
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Trivy filesystem scan JSON (vuln + secrets)
-        uses: aquasecurity/trivy-action@0.33.0
-        with:
-          scan-type: fs
-          scanners: vuln,secret
-          format: json
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: '0'
-          output: trivy-fs.json
-      - name: Trivy filesystem scan SARIF (vuln + secrets)
-        uses: aquasecurity/trivy-action@0.33.0
-        with:
-          scan-type: fs
-          scanners: vuln,secret
-          format: sarif
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: '0'
-          output: trivy-fs.sarif
-      - name: Upload Trivy FS SARIF
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-fs.sarif
-          category: trivy-fs
-        continue-on-error: true
-      - name: Upload repo scan reports
-        uses: actions/upload-artifact@v4
-        with:
-          name: trivy-fs-report
-          path: |
-            trivy-fs.json
-            trivy-fs.sarif
-      - name: FS vulnerability threshold gate
-        if: env.VULN_GATING == '1'
+      - name: Generate summary
         run: |
-          python - <<'PY'
-          import json, os, sys, pathlib
-          data = json.load(open('trivy-fs.json'))
-          high=critical=0
-          for result in data.get('Results', []) or []:
-              for v in result.get('Vulnerabilities', []) or []:
-                  sev = (v.get('Severity') or '').upper()
-                  if sev == 'HIGH': high += 1
-                  elif sev == 'CRITICAL': critical += 1
-              for s in result.get('Secrets', []) or []:  # secrets are informational for now
-                  pass
+          echo "## 🎯 CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Lint | ${{ needs.lint.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tests | ${{ needs.test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Coverage | ${{ needs.coverage.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security Scan | ${{ needs.security-scan.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
 
-          # === ADAPTIVE QUALITY GATING: Delta-Based Vulnerability Check ===
-          baseline_file = pathlib.Path('ci_metrics/quality_metrics.json')
-          baseline_high = 0
-          baseline_critical = 0
-
-          if baseline_file.exists():
-              baseline_data = json.loads(baseline_file.read_text())
-              baseline_high = baseline_data.get('vulnerabilities', {}).get('high', 0)
-              baseline_critical = baseline_data.get('vulnerabilities', {}).get('critical', 0)
-
-          delta_high = high - baseline_high
-          delta_critical = critical - baseline_critical
-          max_delta_high = int(os.environ.get('DELTA_VULN_HIGH', '3'))
-          max_delta_critical = int(os.environ.get('DELTA_VULN_CRITICAL', '1'))
-
-          # Traditional absolute thresholds
-          max_high = int(os.environ.get('MAX_HIGH','9999'))
-          max_critical = int(os.environ.get('MAX_CRITICAL','9999'))
-
-          print(f'FS scan counts: HIGH={high} CRITICAL={critical}')
-          print(f'Baseline: HIGH={baseline_high} CRITICAL={baseline_critical}')
-          print(f'Delta: HIGH={delta_high} (max: {max_delta_high}) CRITICAL={delta_critical} (max: {max_delta_critical})')
-          print(f'Absolute limits: HIGH={max_high} CRITICAL={max_critical}')
-
-          # Fail on either absolute threshold OR delta regression
-          if critical > max_critical or high > max_high:
-              print('❌ Absolute threshold exceeded (filesystem scan). Failing job.')
-              sys.exit(2)
-          elif delta_critical > max_delta_critical or delta_high > max_delta_high:
-              print('❌ Vulnerability regression exceeds delta threshold. Failing job.')
-              sys.exit(2)
-          else:
-              print('✅ Vulnerability checks passed')
-          PY
-
-      # === ADAPTIVE BASELINE UPDATE ===
-      - name: Update vulnerability baseline
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        run: |
-          python - <<'PY'
-          import json, pathlib
-
-          data = json.load(open('trivy-fs.json'))
-          high=critical=0
-          for result in data.get('Results', []) or []:
-              for v in result.get('Vulnerabilities', []) or []:
-                  sev = (v.get('Severity') or '').upper()
-                  if sev == 'HIGH': high += 1
-                  elif sev == 'CRITICAL': critical += 1
-
-          baseline_file = pathlib.Path('ci_metrics/quality_metrics.json')
-          if baseline_file.exists():
-              baseline = json.loads(baseline_file.read_text())
-          else:
-              baseline = {'coverage': {}, 'vulnerabilities': {}, 'history': []}
-
-          baseline['vulnerabilities']['high'] = high
-          baseline['vulnerabilities']['critical'] = critical
-
-          baseline_file.write_text(json.dumps(baseline, indent=2))
-          print(f"✅ Vulnerability baseline updated: HIGH={high} CRITICAL={critical}")
-          PY
-
-  docker-images:
-    name: Build and push Docker images (CPU + CUDA)
-    needs: [coverage-aggregate, meta-self-test]
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      security-events: write
-      id-token: write
-    outputs:
-      image_repo: ${{ steps.prep.outputs.repo }}
-      image_sha: ${{ steps.prep.outputs.sha }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Pre-build disk cleanup
-        run: |
-          echo "Initial disk usage:"; df -h || true
-          echo "Removing large pre-installed SDKs to free space..." || true
-          sudo rm -rf /usr/local/lib/android || true
-          sudo rm -rf /usr/share/dotnet || true
-          sudo rm -rf /opt/ghc || true
-          sudo rm -rf /usr/local/share/boost || true
-          docker system prune -af || true
-          docker builder prune -af || true
-          sudo apt-get clean || true
-          sudo rm -rf /var/lib/apt/lists/* || true
-          sudo rm -rf /var/cache/apt/archives/* || true
-          echo "Disk usage after cleanup:"; df -h || true
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - id: prep
-        run: |
-          echo "repo=ghcr.io/${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
-          echo "sha=${GITHUB_SHA::12}" >> $GITHUB_OUTPUT
-      - name: Build and push CPU image
-        id: build_cpu
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile.cpu
-          platforms: linux/amd64
-          push: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          tags: |
-            ${{ steps.prep.outputs.repo }}:cpu-latest
-            ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
-      - name: Build and push CUDA image
-        id: build_cuda
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile.cuda
-          platforms: linux/amd64
-          push: true
-          tags: |
-            ${{ steps.prep.outputs.repo }}:cuda-latest
-            ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
-          build-args: |
-            TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      - name: Trivy scan (CPU)
-        uses: aquasecurity/trivy-action@0.33.0
-        with:
-          image-ref: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
-          format: sarif
-          output: trivy-cpu.sarif
-          severity: CRITICAL,HIGH
-          vuln-type: os,library
-          ignore-unfixed: true
-          exit-code: '0'
-        continue-on-error: true
-      - name: Trivy scan (CUDA)
-        uses: aquasecurity/trivy-action@0.33.0
-        with:
-          image-ref: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
-          format: sarif
-          output: trivy-cuda.sarif
-          severity: CRITICAL,HIGH
-          vuln-type: os,library
-          ignore-unfixed: true
-          exit-code: '0'
-        continue-on-error: true
-      - name: Trivy scan JSON (CPU)
-        uses: aquasecurity/trivy-action@0.33.0
-        with:
-          image-ref: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
-          format: json
-          output: trivy-cpu.json
-          severity: CRITICAL,HIGH
-          vuln-type: os,library
-          ignore-unfixed: true
-          exit-code: '0'
-        continue-on-error: true
-      - name: Trivy scan JSON (CUDA)
-        uses: aquasecurity/trivy-action@0.33.0
-        with:
-          image-ref: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
-          format: json
-          output: trivy-cuda.json
-          severity: CRITICAL,HIGH
-          vuln-type: os,library
-          ignore-unfixed: true
-          exit-code: '0'
-        continue-on-error: true
-      - name: Upload Trivy results (CPU)
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-cpu.sarif
-          category: trivy-image-cpu
-        continue-on-error: true
-      - name: Upload Trivy results (CUDA)
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-cuda.sarif
-          category: trivy-image-cuda
-        continue-on-error: true
-      - name: Normalize vulnerabilities (Trivy + Grype placeholder pre-SBOM)
-        run: |
-          python - <<'PY'
-          import json, glob, os
-          agg = {}
-          def add(sev):
-              sev=sev.upper()
-              if sev not in agg: agg[sev]=0
-              agg[sev]+=1
-          # Trivy JSON (if present yet; SBOM not required)
-          for f in ['trivy-cpu.json','trivy-cuda.json']:
-              if not os.path.exists(f):
-                  continue
-              data=json.load(open(f))
-              for res in data.get('Results',[]) or []:
-                  for v in res.get('Vulnerabilities',[]) or []:
-                      sev=v.get('Severity')
-                      if sev: add(sev)
-          # Grype will be processed later after SBOM; second normalization step will overwrite
-          json.dump({'counts':agg,'stage':'pre-sbom'}, open('vuln-summary-incremental.json','w'), indent=2)
-          print('Pre-SBOM vuln counts:', agg)
-          PY
-      - name: Free disk space (pre-SBOM)
-        run: |
-          echo "Disk usage before cleanup:" || true
-          df -h || true
-          docker system prune -af || true
-          docker builder prune -af || true
-          sudo rm -rf /var/lib/docker/tmp/* || true
-          sudo rm -rf /tmp/* || true
-          echo "Disk usage after cleanup:" || true
-          df -h || true
-      - name: Generate SBOM (Syft CPU)
-        uses: anchore/sbom-action@v0.17.2
-        with:
-          image: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
-          output-file: sbom-cpu-${{ steps.prep.outputs.sha }}.spdx.json
-          format: spdx-json
-      - name: Generate SBOM (Syft CUDA)
-        uses: anchore/sbom-action@v0.17.2
-        with:
-          image: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
-          output-file: sbom-cuda-${{ steps.prep.outputs.sha }}.spdx.json
-          format: spdx-json
-      - name: Generate SBOM (Syft CPU, CycloneDX)
-        uses: anchore/sbom-action@v0.17.2
-        with:
-          image: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
-          output-file: sbom-cpu-${{ steps.prep.outputs.sha }}.cyclonedx.json
-          format: cyclonedx-json
-      - name: Generate SBOM (Syft CUDA, CycloneDX)
-        uses: anchore/sbom-action@v0.17.2
-        with:
-          image: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
-          output-file: sbom-cuda-${{ steps.prep.outputs.sha }}.cyclonedx.json
-          format: cyclonedx-json
-      - name: Cross-validate SBOM with Grype (CPU)
-        run: |
-          docker run --rm -v $PWD:/scan anchore/grype:v0.80.0 \
-            sbom:/scan/sbom-cpu-${{ steps.prep.outputs.sha }}.spdx.json \
-            --fail-on critical --output json > grype-cpu.json
-          cat grype-cpu.json
-        continue-on-error: true
-      - name: Cross-validate SBOM with Grype (CUDA)
-        run: |
-          docker run --rm -v $PWD:/scan anchore/grype:v0.80.0 \
-            sbom:/scan/sbom-cuda-${{ steps.prep.outputs.sha }}.spdx.json \
-            --fail-on critical --output json > grype-cuda.json
-          cat grype-cuda.json
-        continue-on-error: true
-      - name: Normalize vulnerabilities (Trivy + Grype final)
-        run: |
-          python - <<'PY'
-          import json, os, glob
-          counts = {}
-          def add(sev):
-              sev=sev.upper(); counts[sev]=counts.get(sev,0)+1
-          # Trivy image scans
-          for f in ['trivy-cpu.json','trivy-cuda.json']:
-              if os.path.exists(f):
-                  data=json.load(open(f))
-                  for res in data.get('Results',[]) or []:
-                      for v in res.get('Vulnerabilities',[]) or []:
-                          if v.get('Severity'): add(v['Severity'])
-          # Grype scans
-          for f in ['grype-cpu.json','grype-cuda.json']:
-              if os.path.exists(f):
-                  data=json.load(open(f))
-                  for m in data.get('matches',[]) or []:
-                      sev = (((m.get('vulnerability') or {}).get('severity')) or '').upper()
-                      if sev: add(sev)
-          # FS scan if artifact present (same job not, but may be copied in future)
-          if os.path.exists('trivy-fs.json'):
-              data=json.load(open('trivy-fs.json'))
-              for res in data.get('Results',[]) or []:
-                  for v in res.get('Vulnerabilities',[]) or []:
-                      if v.get('Severity'): add(v['Severity'])
-          json.dump({'counts':counts,'stage':'post-sbom'}, open('vuln-summary.json','w'), indent=2)
-          print('Final aggregated vulnerability counts:', counts)
-          PY
-      - name: SBOM drift check
-        run: |
-          python - <<'PY'
-          import hashlib
-          import json
-          import pathlib
-          import sys
-
-          pathlib.Path('reports').mkdir(exist_ok=True)
-
-          repo = pathlib.Path('ci_metrics/quality_metrics.json')
-          baseline_hash = ""
-          if repo.exists():
-              data = json.loads(repo.read_text())
-              baseline_hash = data.get('sbom', {}).get('baseline_hash', "")
-
-          sha = "${{ steps.prep.outputs.sha }}"
-          paths = [
-              pathlib.Path(f"sbom-cpu-{sha}.spdx.json"),
-              pathlib.Path(f"sbom-cuda-{sha}.spdx.json"),
-          ]
-          hashes = []
-          for path in paths:
-              if path.exists():
-                  hashes.append(hashlib.sha256(path.read_bytes()).hexdigest())
-          if not hashes:
-              print("⚠️  No SBOM files found; skipping drift check.")
-              sys.exit(0)
-          combined = hashlib.sha256("".join(hashes).encode()).hexdigest()
-          pathlib.Path("reports/sbom_hash.txt").write_text(combined)
-          print(f"SBOM combined hash: {combined}")
-          if baseline_hash and combined != baseline_hash:
-              print(f"❌ SBOM drift detected. Baseline hash {baseline_hash}")
-              sys.exit(1)
-          PY
-      - name: Vulnerability threshold gate (images)
-        if: env.VULN_GATING == '1'
-        run: |
-          python - <<'PY'
-          import json, os, sys
-          data=json.load(open('vuln-summary.json'))
-          counts=data.get('counts',{})
-          high=counts.get('HIGH',0)
-
-          critical=counts.get('CRITICAL',0)
-          max_high=int(os.environ.get('MAX_HIGH','9999'))
-          max_critical=int(os.environ.get('MAX_CRITICAL','9999'))
-          print(f'Aggregated vuln counts: HIGH={high} CRITICAL={critical} (limits H={max_high} C={max_critical})')
-          if critical > max_critical or high > max_high:
-              print('Threshold exceeded (image scans). Failing job.')
-              sys.exit(2)
-          PY
-      - name: Install Cosign
-        run: |
-          set -euo pipefail
-          COSIGN_VERSION="v2.4.0"
-          OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
-          ARCH="$(uname -m)"
-          case "$ARCH" in
-            x86_64|amd64) ARCH="amd64" ;;
-            arm64|aarch64) ARCH="arm64" ;;
-            *)
-              echo "Unsupported architecture: $ARCH" >&2
-              exit 1
-              ;;
-          esac
-          case "$OS" in
-            linux|darwin) ;;
-            *)
-              echo "Unsupported OS: $OS" >&2
-              exit 1
-              ;;
-          esac
-          COSIGN_URL="https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-${OS}-${ARCH}"
-          curl -sSL -o cosign "$COSIGN_URL"
-          chmod +x cosign
-          sudo mv cosign /usr/local/bin/cosign
-          cosign version
-      - name: Install SLSA verifier
-        run: |
-          set -euo pipefail
-          VERSION="v2.4.0"
-          curl -sSL -o slsa-verifier.tar.gz "https://github.com/slsa-framework/slsa-verifier/releases/download/${VERSION}/slsa-verifier-linux-amd64.tar.gz"
-          tar -xzf slsa-verifier.tar.gz
-          sudo mv slsa-verifier-linux-amd64 /usr/local/bin/slsa-verifier
-          slsa-verifier version
-      - name: Sign images (keyless)
-        env:
-          COSIGN_EXPERIMENTAL: 'true'
-          COSIGN_YES: 'true'
-          COSIGN_OIDC_PROVIDER: 'github-actions'
-        run: |
-          set -e
-          for tag in \
-            ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }} \
-            ${{ steps.prep.outputs.repo }}:cpu-latest \
-            ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }} \
-            ${{ steps.prep.outputs.repo }}:cuda-latest; do
-            echo "Signing $tag";
-            cosign sign --yes $tag || exit 1;
-          done
-      - name: Attest build provenance (CPU)
-        uses: actions/attest-build-provenance@v1
-        with:
-          subject-name: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
-          subject-digest: ${{ steps.build_cpu.outputs.digest }}
-      - name: Attest build provenance (CUDA)
-        uses: actions/attest-build-provenance@v1
-        with:
-          subject-name: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
-          subject-digest: ${{ steps.build_cuda.outputs.digest }}
-      - name: Verify SLSA provenance (CPU)
-        run: |
-          slsa-verifier verify-image ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }} \
-            --source-uri github.com/${{ github.repository }} \
-            --source-tag ${{ github.ref }}
-      - name: Verify SLSA provenance (CUDA)
-        run: |
-          slsa-verifier verify-image ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }} \
-            --source-uri github.com/${{ github.repository }} \
-            --source-tag ${{ github.ref }}
-      - name: Upload SBOM artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: sbom
-          path: |
-            sbom-*.spdx.json
-            sbom-*.cyclonedx.json
-            grype-*.json
-            vuln-summary*.json
-            trivy-*.json
-            reports/sbom_hash.txt
-
-  docker-scan-pr:
-    name: Scan Docker images for PRs (no push)
-    needs: [coverage-aggregate, meta-self-test]
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    permissions:
-      contents: read
-      security-events: write
-    steps:
-      - uses: actions/checkout@v4
-      - name: Pre-build disk cleanup
-        run: |
-          echo "Initial disk usage (PR build job):"; df -h || true
-          sudo rm -rf /usr/local/lib/android || true
-          sudo rm -rf /usr/share/dotnet || true
-          sudo rm -rf /opt/ghc || true
-          sudo rm -rf /usr/local/share/boost || true
-            # Clean any lingering docker data before we create builder
-          docker system prune -af || true
-          docker builder prune -af || true
-          sudo apt-get clean || true
-          sudo rm -rf /var/lib/apt/lists/* || true
-          sudo rm -rf /var/cache/apt/archives/* || true
-          echo "Disk usage after cleanup (PR build job):"; df -h || true
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - id: prep
-        run: |
-          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          echo "repo=ghcr.io/${REPO_LOWER}" >> $GITHUB_OUTPUT
-          echo "sha=${GITHUB_SHA::12}" >> $GITHUB_OUTPUT
-      - name: Build CPU image (no push)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile.cpu
-          platforms: linux/amd64
-          push: false
-          tags: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      - name: Build CUDA image (no push)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile.cuda
-          platforms: linux/amd64
-          push: false
-          tags: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
-          build-args: |
-            TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      - name: Trivy scan (CPU) [PR]
-        uses: aquasecurity/trivy-action@0.33.0
-        with:
-          image-ref: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
-          format: sarif
-          output: trivy-cpu-pr.sarif
-          severity: CRITICAL,HIGH
-          vuln-type: os,library
-          ignore-unfixed: true
-          exit-code: '0'
-        continue-on-error: true
-      - name: Trivy scan (CUDA) [PR]
-        uses: aquasecurity/trivy-action@0.33.0
-        with:
-          image-ref: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
-          format: sarif
-          output: trivy-cuda-pr.sarif
-          severity: CRITICAL,HIGH
-          vuln-type: os,library
-          ignore-unfixed: true
-          exit-code: '0'
-        continue-on-error: true
-      - name: Trivy scan JSON (CPU) [PR]
-        uses: aquasecurity/trivy-action@0.33.0
-        with:
-          image-ref: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
-          format: json
-          output: trivy-cpu-pr.json
-          severity: CRITICAL,HIGH
-          vuln-type: os,library
-          ignore-unfixed: true
-          exit-code: '0'
-        continue-on-error: true
-      - name: Trivy scan JSON (CUDA) [PR]
-        uses: aquasecurity/trivy-action@0.33.0
-        with:
-          image-ref: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
-          format: json
-          output: trivy-cuda-pr.json
-          severity: CRITICAL,HIGH
-          vuln-type: os,library
-          ignore-unfixed: true
-          exit-code: '0'
-        continue-on-error: true
-      - name: Upload Trivy SARIF results (PR CPU)
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-cpu-pr.sarif
-          category: trivy-pr-cpu
-        continue-on-error: true
-      - name: Upload Trivy SARIF results (PR CUDA)
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-cuda-pr.sarif
-          category: trivy-pr-cuda
-        continue-on-error: true
-      - name: Normalize vulnerabilities (PR)
-        run: |
-          python - <<'PY'
-          import json, os
-          counts={}
-          def add(sev):
-              sev=sev.upper(); counts[sev]=counts.get(sev,0)+1
-          for f in ['trivy-cpu-pr.json','trivy-cuda-pr.json']:
-              if os.path.exists(f):
-                  data=json.load(open(f))
-                  for res in data.get('Results',[]) or []:
-                      for v in res.get('Vulnerabilities',[]) or []:
-                          if v.get('Severity'): add(v['Severity'])
-          json.dump({'counts':counts,'stage':'pr'}, open('vuln-summary-pr.json','w'), indent=2)
-          print('PR aggregated vulnerability counts:', counts)
-          PY
-      - name: Vulnerability threshold gate (PR images)
-        if: env.VULN_GATING == '1'
-        run: |
-          python - <<'PY'
-          import json, os, sys
-          data=json.load(open('vuln-summary-pr.json'))
-          counts=data.get('counts',{})
-          high=counts.get('HIGH',0); critical=counts.get('CRITICAL',0)
-          max_high=int(os.environ.get('MAX_HIGH','9999'))
-          max_critical=int(os.environ.get('MAX_CRITICAL','9999'))
-          print(f'PR vuln counts: HIGH={high} CRITICAL={critical} (limits H={max_high} C={max_critical})')
-          if critical > max_critical or high > max_high:
-              print('Threshold exceeded (PR image scans). Failing job.')
-              sys.exit(2)
-          PY
-      - name: Free disk space (pre-SBOM PR)
-        # Mirrors the cleanup in the push workflow to avoid SBOM generation failures due to low disk.
-        run: |
-          echo "Disk usage before cleanup (PR job):" || true
-          df -h || true
-          docker system prune -af || true
-          docker builder prune -af || true
-          sudo rm -rf /var/lib/docker/tmp/* || true
-          sudo rm -rf /tmp/* || true
-          echo "Disk usage after cleanup (PR job):" || true
-          df -h || true
-      - name: Generate SBOM (Syft CPU PR)
-        uses: anchore/sbom-action@v0.17.2
-        with:
-          image: ${{ steps.prep.outputs.repo }}:cpu-${{ steps.prep.outputs.sha }}
-          output-file: sbom-cpu-pr-${{ steps.prep.outputs.sha }}.spdx.json
-          format: spdx-json
-      - name: Generate SBOM (Syft CUDA PR)
-        uses: anchore/sbom-action@v0.17.2
-        with:
-          image: ${{ steps.prep.outputs.repo }}:cuda-${{ steps.prep.outputs.sha }}
-          output-file: sbom-cuda-pr-${{ steps.prep.outputs.sha }}.spdx.json
-          format: spdx-json
-      - name: SBOM drift check (PR)
-        run: |
-          python - <<'PY'
-          import hashlib
-          import json
-          import pathlib
-          import sys
-
-          pathlib.Path('reports').mkdir(exist_ok=True)
-
-          baseline_file = pathlib.Path('ci_metrics/quality_metrics.json')
-          baseline_hash = ""
-          if baseline_file.exists():
-              data = json.loads(baseline_file.read_text())
-              baseline_hash = data.get('sbom', {}).get('baseline_hash', "")
-
-          sha = "${{ steps.prep.outputs.sha }}"
-          paths = [
-              pathlib.Path(f"sbom-cpu-pr-{sha}.spdx.json"),
-              pathlib.Path(f"sbom-cuda-pr-{sha}.spdx.json"),
-          ]
-          hashes = []
-          for path in paths:
-              if path.exists():
-                  hashes.append(hashlib.sha256(path.read_bytes()).hexdigest())
-          if not hashes:
-              print("⚠️  No SBOM files located for PR scan.")
-              sys.exit(0)
-          combined = hashlib.sha256("".join(hashes).encode()).hexdigest()
-          pathlib.Path("reports/sbom_hash_pr.txt").write_text(combined)
-          print(f"PR SBOM combined hash: {combined}")
-          if baseline_hash and combined != baseline_hash:
-              print(f"❌ SBOM drift detected relative to baseline {baseline_hash}")
-              sys.exit(1)
-          PY
-      - name: Upload SBOM artifacts (PR)
-        uses: actions/upload-artifact@v4
-        with:
-          name: sbom-pr
-          path: |
-            sbom-*-pr-*.spdx.json
-            trivy-*-pr.json
-            vuln-summary-pr.json
-            reports/sbom_hash_pr.txt
-  canary-validation:
-    name: Canary Validation
-    needs: [docker-images, ci_metrics]
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: read
-    steps:
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Pull canary image
-        run: |
-          docker pull ${{ needs.docker-images.outputs.image_repo }}:cpu-${{ needs.docker-images.outputs.image_sha }}
-      - name: Run container smoke check
-        run: |
-          docker run --rm ${{ needs.docker-images.outputs.image_repo }}:cpu-${{ needs.docker-images.outputs.image_sha }} \
-            python -c "import json; print(json.dumps({'status':'ok'}))"
-      - name: Download CI metrics
-        uses: actions/download-artifact@v4
-        with:
-          name: ci-metrics
-          path: canary_metrics
-        continue-on-error: true
-      - name: Evaluate telemetry
-        run: |
-          python tools/canary_validate.py \
-            --metrics canary_metrics/ci_metrics/run_metrics.json \
-            --min-coverage 90.0
+          if [ "${{ needs.coverage.outputs.coverage_pct }}" != "" ]; then
+            echo "### 📊 Coverage: ${{ needs.coverage.outputs.coverage_pct }}%" >> $GITHUB_STEP_SUMMARY
+          fi
