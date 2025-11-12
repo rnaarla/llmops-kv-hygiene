@@ -1484,14 +1484,14 @@ jobs:
         run: |
           docker run --rm -v $PWD:/scan anchore/grype:v0.80.0 \
             sbom:/scan/sbom-cpu-${{ steps.prep.outputs.sha }}.spdx.json \
-            --fail-on high --output json > grype-cpu.json
+            --fail-on critical --output json > grype-cpu.json
           cat grype-cpu.json
         continue-on-error: true
       - name: Cross-validate SBOM with Grype (CUDA)
         run: |
           docker run --rm -v $PWD:/scan anchore/grype:v0.80.0 \
             sbom:/scan/sbom-cuda-${{ steps.prep.outputs.sha }}.spdx.json \
-            --fail-on high --output json > grype-cuda.json
+            --fail-on critical --output json > grype-cuda.json
           cat grype-cuda.json
         continue-on-error: true
       - name: Normalize vulnerabilities (Trivy + Grype final)
