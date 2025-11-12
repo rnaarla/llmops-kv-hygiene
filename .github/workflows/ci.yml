@@ -209,6 +209,32 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # === DIAGNOSTICS: Verify test environment ===
+      - name: Verify test environment
+        run: |
+          set -euo pipefail
+          echo "=== Python environment ==="
+          python --version
+          pip --version
+          
+          echo -e "\n=== pytest version ==="
+          pytest --version || echo "❌ pytest not found!"
+          
+          echo -e "\n=== pytest-cov version ==="
+          python -c "import pytest_cov; print(f'pytest-cov {pytest_cov.__version__}')" || echo "❌ pytest-cov not found!"
+          
+          echo -e "\n=== Test discovery (first 20) ==="
+          pytest --collect-only -q | head -20 || echo "❌ Test collection failed!"
+          
+          echo -e "\n=== Test count ==="
+          pytest --collect-only -q | wc -l || echo "0"
+          
+          echo -e "\n=== Tools directory contents ==="
+          ls -la tools/ | head -10
+          
+          echo -e "\n=== Tools __init__.py exists? ==="
+          test -f tools/__init__.py && echo "✅ Yes" || echo "❌ No"
+
       # === CONTEXT-AWARE TEST SELECTION ===
       - name: Install test selection tools
         if: needs.generate-matrix.outputs.test_selection_mode == 'selective'
