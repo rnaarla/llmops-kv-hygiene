@@ -94,8 +94,11 @@ jobs:
               has_critical = any(any(p in f for p in critical_patterns) for f in changed)
               mode = 'full' if has_critical else 'selective'
 
+          serialized = json.dumps(changed)
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f"files={json.dumps(changed)}\n")
+              f.write("files<<EOF\n")
+              f.write(serialized)
+              f.write("\nEOF\n")
               f.write(f"mode={mode}\n")
 
           print(f"Test selection mode: {mode}")
@@ -480,6 +483,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      PYTHONPATH: ${{ github.workspace }}:${{ env.PYTHONPATH }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -1096,11 +1101,11 @@ jobs:
           merge-multiple: true
         continue-on-error: true
       - name: Download SBOM metadata
+        if: github.event_name != 'pull_request'
         uses: actions/download-artifact@v4
         with:
           name: sbom
           path: ci_artifacts/sbom
-        continue-on-error: true
 
       - name: Calculate CI metrics
         id: metrics
