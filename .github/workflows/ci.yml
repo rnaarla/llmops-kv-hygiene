@@ -564,6 +564,118 @@ jobs:
           name: ai-triage-report
           path: ai_analysis/
 
+  auto-fix:
+    name: Autonomous Code Repair
+    needs: ai-triage
+    runs-on: ubuntu-latest
+    if: needs.ai-triage.outputs.fix_confidence > 0.9
+    permissions:
+      contents: write
+      pull-requests: write
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download triage report
+        uses: actions/download-artifact@v4
+        with:
+          name: ai-triage-report
+          path: ai_analysis
+
+      - name: Generate and apply fix
+        env:
+          OPENAI_API_KEY: ${{ secrets.AI_API_KEY }}
+        run: |
+          python - <<'PY'
+          import json, os, pathlib, subprocess, sys, urllib.request
+          from datetime import datetime
+
+          triage = json.loads(pathlib.Path('ai_analysis/triage_report.json').read_text())
+          fixes = sorted(triage.get('fixes', []), key=lambda x: x.get('confidence', 0), reverse=True)
+
+          if not fixes or fixes[0]['confidence'] < 0.9:
+              print("No high-confidence fixes")
+              sys.exit(0)
+
+          fix = fixes[0]
+          print(f"Applying fix with {fix['confidence']} confidence")
+
+          # Request detailed fix from AI
+          prompt = f"""Generate a production-ready fix:
+
+          Problem: {fix['description']}
+          Approach: {fix.get('code_change', 'N/A')}
+
+          Provide JSON: {{"files": [{{"path": "...", "content": "..."}}], "explanation": "...", "tests": "..."}}
+          """
+
+          api_key = os.environ.get('OPENAI_API_KEY')
+          if not api_key:
+              print("API key missing")
+              sys.exit(0)
+
+          try:
+              request_data = {
+                  "model": "gpt-4-turbo-preview",
+                  "messages": [{"role": "user", "content": prompt}],
+                  "max_tokens": 8000
+              }
+
+              req = urllib.request.Request(
+                  'https://api.openai.com/v1/chat/completions',
+                  data=json.dumps(request_data).encode(),
+                  headers={
+                      'Content-Type': 'application/json',
+                      'Authorization': f'Bearer {api_key}'
+                  }
+              )
+
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  result = json.loads(response.read().decode())
+                  ai_response = result['choices'][0]['message']['content']
+
+                  start = ai_response.find('{')
+                  end = ai_response.rfind('}') + 1
+                  fix_data = json.loads(ai_response[start:end])
+
+                  # Create branch
+                  branch = f"autofix-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+                  subprocess.run(['git', 'config', 'user.name', 'github-actions[bot]'], check=True)
+                  subprocess.run(['git', 'config', 'user.email', 'github-actions[bot]@users.noreply.github.com'], check=True)
+                  subprocess.run(['git', 'checkout', '-b', branch], check=True)
+
+                  # Apply fixes
+                  for file_fix in fix_data.get('files', []):
+                      file_path = pathlib.Path(file_fix['path'])
+                      file_path.parent.mkdir(parents=True, exist_ok=True)
+                      file_path.write_text(file_fix['content'])
+                      subprocess.run(['git', 'add', str(file_path)], check=True)
+
+                  # Commit and push
+                  msg = f"autofix: {fix['description']}\n\n{fix_data['explanation']}"
+                  subprocess.run(['git', 'commit', '-m', msg], check=True)
+                  subprocess.run(['git', 'push', 'origin', branch], check=True)
+
+                  print(f"✅ Created branch {branch}")
+
+          except Exception as e:
+              print(f"❌ Auto-fix failed: {e}")
+              sys.exit(1)
+          PY
+
+      - name: Create Pull Request
+        if: success()
+        run: |
+          gh pr create \
+            --title "🤖 Automated Fix" \
+            --body "Auto-generated fix from AI triage. Please review carefully." \
+            --label "autofix-bot" \
+            --label "needs-review"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   # ===========================================================================
   # PHASE 4: Security Scanning
   # ===========================================================================
