@@ -38,6 +38,14 @@ def test_metrics_exporter_serves(tmp_path, monkeypatch):
     tracer.free(h)
     tracer.export_metrics_prometheus(str(metrics_file))
 
+    # Verify metrics file was created and has content
+    assert metrics_file.exists(), f"Metrics file {metrics_file} was not created"
+    content = metrics_file.read_text()
+    assert len(content) > 0, f"Metrics file {metrics_file} is empty"
+    assert (
+        "kv_hygiene_unsanitized_regions" in content
+    ), f"Metrics file doesn't contain expected metric. Content:\n{content[:500]}"
+
     # Launch exporter in thread using port 0 (let OS allocate a free port to avoid races)
     monkeypatch.setenv("METRICS_FILE", str(metrics_file))
     from tools import metrics_exporter
@@ -52,9 +60,14 @@ def test_metrics_exporter_serves(tmp_path, monkeypatch):
     conn.request("GET", "/metrics")
     resp = conn.getresponse()
     body = resp.read().decode()
-    assert resp.status == 200
+    assert resp.status == 200, f"Expected 200, got {resp.status}"
     # Expect at least a known metric line
-    assert "kv_hygiene_unsanitized_regions" in body
+    assert "kv_hygiene_unsanitized_regions" in body, (
+        f"Expected 'kv_hygiene_unsanitized_regions' in metrics response.\n"
+        f"Metrics file: {metrics_file}\n"
+        f"File exists: {metrics_file.exists()}\n"
+        f"Response body ({len(body)} chars):\n{body[:500]}"
+    )
     # 404 path
     conn.request("GET", "/nope")
     resp2 = conn.getresponse()
