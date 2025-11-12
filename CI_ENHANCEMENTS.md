@@ -410,13 +410,13 @@ Expected behavior:
 
 All original features are **fully retained**:
 
-✅ Matrix testing and code coverage (90% threshold)  
-✅ Python linting, type checking, caching  
-✅ Trivy/Grype scanning and SBOM attestation  
-✅ Docker multi-arch builds (CPU + CUDA)  
-✅ Cosign signing and provenance  
-✅ Cache forensics and coverage aggregation  
-✅ Scheduled daily and PR triggers  
+✅ Matrix testing and code coverage (90% threshold)
+✅ Python linting, type checking, caching
+✅ Trivy/Grype scanning and SBOM attestation
+✅ Docker multi-arch builds (CPU + CUDA)
+✅ Cosign signing and provenance
+✅ Cache forensics and coverage aggregation
+✅ Scheduled daily and PR triggers
 
 **New jobs are additive** and designed to fail gracefully if:
 - AI API keys not configured (warnings only)
@@ -451,6 +451,6 @@ Pull requests welcome! Tag with `enhancement` and `ci-pipeline`.
 
 ---
 
-**Version**: 1.0.0  
-**Last Updated**: 2025-01-15  
+**Version**: 1.0.0
+**Last Updated**: 2025-01-15
 **Maintainer**: CI/CD Team

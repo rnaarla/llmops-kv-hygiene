@@ -155,6 +155,6 @@ See `CI_ENHANCEMENTS.md` for:
 
 ---
 
-**Version**: 1.0.0  
-**Compatible With**: GitHub Actions, Python 3.11+, Docker  
+**Version**: 1.0.0
+**Compatible With**: GitHub Actions, Python 3.11+, Docker
 **AI Models**: Claude 3.5 Sonnet (primary), GPT-4 Turbo (alternative)
