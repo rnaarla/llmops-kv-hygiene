@@ -483,8 +483,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    env:
-      PYTHONPATH: ${{ github.workspace }}:${{ env.PYTHONPATH }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -497,7 +495,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       - name: Run chaos simulation
-        run: python tools/chaos_validation.py
+        run: |
+          export PYTHONPATH="$PYTHONPATH:$(pwd)"
+          python tools/chaos_validation.py
 
   # =============================================================================
   # === AI-AUGMENTED QUALITY AND TRIAGE STAGE ===
