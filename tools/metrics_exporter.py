@@ -32,8 +32,10 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"not found")
             return
+        # Read METRICS_FILE from environment at request time to support runtime configuration
+        metrics_file = os.environ.get("METRICS_FILE", METRICS_FILE)
         try:
-            with open(METRICS_FILE, "rb") as f:
+            with open(metrics_file, "rb") as f:
                 data = f.read()
         except FileNotFoundError:
             data = b""  # empty until produced
