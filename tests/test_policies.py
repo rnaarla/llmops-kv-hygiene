@@ -29,6 +29,8 @@ def test_check_reuse_over_limit():
     assert check_reuse(2, 2) is False
     # Negative max_reuse treated as unlimited -> no violation
     assert check_reuse(10, -1) is False
+    # None max_reuse should return False
+    assert check_reuse(10, None) is False
 
 
 def test_evaluate_combined():

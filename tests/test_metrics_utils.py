@@ -39,3 +39,15 @@ def test_percentile_exact_index():
     # For data length 5, 50th percentile -> k=(4*0.5)=2.0 exact index
     data = [5, 1, 9, 3, 7]
     assert percentile(data, 50) == sorted(data)[2]
+
+
+def test_percentile_edge_case_f_equals_c():
+    """Test edge case where f == c (at boundary)."""
+    # With 2 elements, 100th percentile should hit the f == c case
+    data = [1.0, 2.0]
+    result = percentile(data, 100)
+    assert result == 2.0
+
+    # At 0th percentile
+    result = percentile(data, 0)
+    assert result == 1.0

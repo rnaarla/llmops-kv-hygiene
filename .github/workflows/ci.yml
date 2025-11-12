@@ -18,7 +18,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  COVERAGE_THRESHOLD: '80'
+  COVERAGE_THRESHOLD: '90'
   PYTHON_VERSION: '3.11'
 
 permissions:
