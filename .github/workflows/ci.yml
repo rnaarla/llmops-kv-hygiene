@@ -540,6 +540,42 @@ jobs:
           git push
 
   # ===========================================================================
+  # PHASE 6.5: Canary Validation
+  # ===========================================================================
+  canary-validation:
+    name: Canary Validation
+    needs: [docker, update-metrics]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull canary image
+        run: |
+          docker pull ghcr.io/${{ github.repository }}:${{ github.sha }}
+
+      - name: Run container smoke check
+        run: |
+          docker run --rm ghcr.io/${{ github.repository }}:${{ github.sha }} \
+            python -c "import json; print(json.dumps({'status':'ok'}))"
+
+      - name: Evaluate telemetry
+        run: |
+          python tools/canary_validate.py \
+            --metrics ci_metrics/quality_metrics.json \
+            --min-coverage 90.0
+
+  # ===========================================================================
   # PHASE 7: Summary Report
   # ===========================================================================
   summary:
