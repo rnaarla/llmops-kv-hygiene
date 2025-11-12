@@ -1605,6 +1605,7 @@ jobs:
 
   docker-scan-pr:
     name: Scan Docker images for PRs (no push)
+    needs: coverage-aggregate
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
