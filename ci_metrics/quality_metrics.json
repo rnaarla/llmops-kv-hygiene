@@ -1,6 +1,6 @@
 {
   "coverage": {
-    "baseline": 46.23,
+    "baseline": 30.819999999999997,
     "current": 0.0
   },
   "vulnerabilities": {
@@ -21,7 +21,12 @@
       "timestamp": "2025-11-12T18:33:55.724309",
       "coverage": 0.0,
       "run_id": "19307876465"
+    },
+    {
+      "timestamp": "2025-11-12T18:50:59.463674",
+      "coverage": 0.0,
+      "run_id": "19308283404"
     }
   ],
-  "last_updated": "2025-11-12T18:33:55.860345"
+  "last_updated": "2025-11-12T18:50:59.596519"
 }
