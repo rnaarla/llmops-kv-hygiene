@@ -104,17 +104,25 @@ jobs:
 
       - id: mk
         run: |
-          python - <<'PY'
-          import json, os
-          path = 'ci_cd/test_matrix.json'
-          with open(path,'r',encoding='utf-8') as f:
-              cfg = json.load(f)
-          matrix = {
-            'os': cfg.get('platform', ['ubuntu-latest']),
-            'python-version': cfg.get('python', ['3.11'])
-          }
-          print('Matrix:', matrix)
-          print(f"matrix={json.dumps(matrix)}", file=open(os.environ['GITHUB_OUTPUT'],'a'))
+          python3 - <<'PY'
+          import json, os, sys
+          try:
+              path = 'ci_cd/test_matrix.json'
+              with open(path, 'r', encoding='utf-8') as f:
+                  cfg = json.load(f)
+              matrix = {
+                'os': cfg.get('platform', ['ubuntu-latest']),
+                'python-version': cfg.get('python', ['3.11'])
+              }
+              print('Matrix:', matrix)
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+                  output.write(f"matrix={json.dumps(matrix)}\n")
+          except json.JSONDecodeError as e:
+              print(f"ERROR: Invalid JSON in {path}: {e}", file=sys.stderr)
+              sys.exit(1)
+          except Exception as e:
+              print(f"ERROR: Failed to load matrix: {e}", file=sys.stderr)
+              sys.exit(1)
           PY
 
   lint:
@@ -1109,6 +1117,7 @@ jobs:
         with:
           name: sbom
           path: ci_artifacts/sbom
+        continue-on-error: true  # SBOM may not exist if docker-images job was skipped
 
       - name: Calculate CI metrics
         id: metrics
