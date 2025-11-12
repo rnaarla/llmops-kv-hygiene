@@ -22,6 +22,10 @@ env:
   PYTHON_VERSION: '3.11'
   TEST_SELECTION_ENABLED: 'true'
   TEST_SELECTION_THRESHOLD: '20'
+  # AI configuration
+  AI_CONFIDENCE_THRESHOLD: '0.9'
+  AI_MODEL: 'gpt-4-turbo-preview'
+  AI_MAX_TOKENS: '4096'
 
 permissions:
   contents: write
@@ -384,6 +388,181 @@ jobs:
         run: |
           export PYTHONPATH="$PYTHONPATH:$(pwd)"
           python tools/chaos_validation.py
+
+  # ===========================================================================
+  # PHASE 3.7: AI-Assisted Triage
+  # ===========================================================================
+  ai-triage:
+    name: AI-Assisted Error Triage
+    needs: [lint, test, coverage, meta-self-test, chaos-validation]
+    runs-on: ubuntu-latest
+    if: always()
+    timeout-minutes: 10
+    outputs:
+      fix_confidence: ${{ steps.triage.outputs.confidence }}
+      has_flaky_tests: ${{ steps.triage.outputs.flaky }}
+      triage_summary: ${{ steps.triage.outputs.summary }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+        continue-on-error: true
+
+      - name: Collect errors and create report
+        id: collect
+        run: |
+          mkdir -p ai_analysis
+          python - <<'PY'
+          import json, pathlib, xml.etree.ElementTree as ET
+
+          errors = []
+          warnings = []
+
+          # Parse test results from XML
+          for xml_file in pathlib.Path('artifacts').rglob('*.xml'):
+              try:
+                  tree = ET.parse(xml_file)
+                  for testcase in tree.findall('.//testcase'):
+                      failure = testcase.find('failure')
+                      if failure is not None:
+                          errors.append({
+                              'type': 'test_failure',
+                              'test': testcase.get('name'),
+                              'file': testcase.get('file'),
+                              'message': failure.get('message', ''),
+                              'details': (failure.text or '')[:500]
+                          })
+              except: pass
+
+          # Parse coverage for low-coverage warnings
+          for json_file in pathlib.Path('artifacts').rglob('coverage.json'):
+              try:
+                  data = json.loads(json_file.read_text())
+                  for file, info in data.get('files', {}).items():
+                      cov = info.get('summary', {}).get('percent_covered', 100)
+                      if cov < 80:
+                          warnings.append({
+                              'type': 'low_coverage',
+                              'file': file,
+                              'coverage': cov
+                          })
+              except: pass
+
+          report = {
+              'errors': errors[:10],
+              'warnings': warnings[:10],
+              'error_count': len(errors),
+              'warning_count': len(warnings)
+          }
+
+          pathlib.Path('ai_analysis/error_report.json').write_text(json.dumps(report, indent=2))
+          print(f"📊 Collected {len(errors)} errors, {len(warnings)} warnings")
+          PY
+
+      - name: AI-powered triage
+        id: triage
+        env:
+          OPENAI_API_KEY: ${{ secrets.AI_API_KEY }}
+        run: |
+          python - <<'PY'
+          import json, os, pathlib, sys, urllib.request
+
+          report_path = pathlib.Path('ai_analysis/error_report.json')
+          report = json.loads(report_path.read_text())
+
+          if report['error_count'] == 0:
+              print("✅ No errors to triage")
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                  f.write("confidence=0.0\n")
+                  f.write("flaky=false\n")
+                  f.write("summary=No errors detected\n")
+              sys.exit(0)
+
+          api_key = os.environ.get('OPENAI_API_KEY')
+          if not api_key:
+              print("⚠️ AI_API_KEY not set, skipping")
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                  f.write("confidence=0.0\n")
+                  f.write("flaky=false\n")
+                  f.write("summary=AI key not configured\n")
+              sys.exit(0)
+
+          # Prepare prompt
+          errors_text = json.dumps(report['errors'], indent=2)
+          prompt = f"""Analyze these CI/CD failures and provide:
+          1. Root cause clusters (group similar errors)
+          2. Flaky test detection
+          3. Fix recommendations with confidence (0-1)
+          4. Priority ranking
+
+          Errors: {errors_text}
+
+          Respond in JSON:
+          {{
+            "clusters": [{{"type": "...", "count": N, "root_cause": "..."}}],
+            "flaky_tests": ["test1"],
+            "fixes": [{{"confidence": 0.95, "description": "..."}}],
+            "summary": "Brief summary"
+          }}"""
+
+          try:
+              request_data = {
+                  "model": os.environ.get('AI_MODEL', 'gpt-4-turbo-preview'),
+                  "messages": [{"role": "user", "content": prompt}],
+                  "max_tokens": int(os.environ.get('AI_MAX_TOKENS', '4096')),
+                  "temperature": 0.3
+              }
+
+              req = urllib.request.Request(
+                  'https://api.openai.com/v1/chat/completions',
+                  data=json.dumps(request_data).encode(),
+                  headers={
+                      'Content-Type': 'application/json',
+                      'Authorization': f'Bearer {api_key}'
+                  }
+              )
+
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  result = json.loads(response.read().decode())
+                  ai_response = result['choices'][0]['message']['content']
+
+                  # Extract JSON
+                  start = ai_response.find('{')
+                  end = ai_response.rfind('}') + 1
+                  if start >= 0 and end > start:
+                      triage_data = json.loads(ai_response[start:end])
+                  else:
+                      triage_data = {"summary": "Parse failed", "fixes": [], "flaky_tests": []}
+
+                  pathlib.Path('ai_analysis/triage_report.json').write_text(json.dumps(triage_data, indent=2))
+
+                  max_conf = max([f.get('confidence', 0) for f in triage_data.get('fixes', [])], default=0.0)
+                  has_flaky = len(triage_data.get('flaky_tests', [])) > 0
+
+                  with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                      f.write(f"confidence={max_conf}\n")
+                      f.write(f"flaky={'true' if has_flaky else 'false'}\n")
+                      f.write(f"summary={triage_data.get('summary', 'Done')}\n")
+
+                  print(f"✅ AI triage: confidence={max_conf}, flaky={has_flaky}")
+
+          except Exception as e:
+              print(f"⚠️ AI call failed: {e}")
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                  f.write("confidence=0.0\n")
+                  f.write("flaky=false\n")
+                  f.write(f"summary=API failed: {str(e)[:100]}\n")
+          PY
+
+      - name: Upload triage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-triage-report
+          path: ai_analysis/
 
   # ===========================================================================
   # PHASE 4: Security Scanning
