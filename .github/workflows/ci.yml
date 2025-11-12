@@ -458,6 +458,62 @@ jobs:
         with:
           sarif_file: 'trivy-image.sarif'
 
+  docker-scan-pr:
+    name: Scan Docker Images for PRs
+    needs: [coverage, meta-self-test]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pre-build disk cleanup
+        run: |
+          echo "Initial disk usage:"; df -h || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/share/boost || true
+          docker system prune -af || true
+          docker builder prune -af || true
+          sudo apt-get clean || true
+          echo "Disk usage after cleanup:"; df -h || true
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build CPU image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.cpu
+          platforms: linux/amd64
+          push: false
+          tags: ghcr.io/${{ github.repository }}:pr-${{ github.event.pull_request.number }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy scan CPU image
+        uses: aquasecurity/trivy-action@0.33.0
+        with:
+          image-ref: ghcr.io/${{ github.repository }}:pr-${{ github.event.pull_request.number }}
+          format: sarif
+          output: trivy-pr-cpu.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+        continue-on-error: true
+
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-pr-cpu.sarif
+
   # ===========================================================================
   # PHASE 6: Update Metrics
   # ===========================================================================
