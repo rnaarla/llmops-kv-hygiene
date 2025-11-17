@@ -21,6 +21,11 @@ repos:
     hooks:
       - id: ruff
         args: ["--fix"]
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.41.0
+    hooks:
+      - id: markdownlint
+        args: ["--fix"]
   # Converted local hooks to managed python environments for deterministic behavior.
   - repo: local
     hooks:

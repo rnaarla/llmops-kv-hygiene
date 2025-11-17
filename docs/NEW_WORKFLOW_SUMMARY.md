@@ -7,11 +7,13 @@ Completely rebuilt the CI/CD pipeline from scratch to fix persistent coverage ag
 ## 📊 Key Improvements
 
 ### Size Reduction
+
 - **Before**: 2,239 lines
 - **After**: 410 lines
 - **Reduction**: 82% (1,829 lines removed)
 
 ### Architecture Simplification
+
 - Reduced from **16 jobs** to **7 jobs**
 - Clear, linear flow with well-defined phases
 - Removed flaky AI features that were causing instability
@@ -20,11 +22,13 @@ Completely rebuilt the CI/CD pipeline from scratch to fix persistent coverage ag
 ## 🔄 New Pipeline Structure
 
 ### Phase 1: Code Quality (`lint`)
+
 - Ruff (linting)
 - Black (formatting)
 - Mypy (type checking)
 
 ### Phase 2: Testing (`test`)
+
 - Matrix testing: 2 OS × 3 Python versions = 6 test jobs
 - Ubuntu + macOS
 - Python 3.11, 3.12, 3.13
@@ -33,6 +37,7 @@ Completely rebuilt the CI/CD pipeline from scratch to fix persistent coverage ag
 - Immediate validation and upload with `if: always()`
 
 ### Phase 3: Coverage Aggregation (`coverage`)
+
 - Downloads all coverage artifacts
 - **Fix**: Uses `merge-multiple: false` to prevent overwrites
 - Comprehensive debugging output
@@ -41,11 +46,13 @@ Completely rebuilt the CI/CD pipeline from scratch to fix persistent coverage ag
 - Outputs coverage percentage for downstream jobs
 
 ### Phase 4: Security Scanning (`security-scan`)
+
 - Trivy filesystem scan
 - SARIF upload to GitHub Security
 - Detects CRITICAL and HIGH severity issues
 
 ### Phase 5: Docker Build & Scan (`docker`)
+
 - **Only on main branch pushes**
 - Builds and pushes to GitHub Container Registry
 - Multi-arch support ready
@@ -53,6 +60,7 @@ Completely rebuilt the CI/CD pipeline from scratch to fix persistent coverage ag
 - Uses GitHub Actions cache for faster builds
 
 ### Phase 6: Update Metrics (`update-metrics`)
+
 - **Only on main branch pushes**
 - Downloads aggregate coverage
 - Updates `ci_metrics/quality_metrics.json`
@@ -60,6 +68,7 @@ Completely rebuilt the CI/CD pipeline from scratch to fix persistent coverage ag
 - Commits results with `[skip ci]`
 
 ### Phase 7: Summary Report (`summary`)
+
 - **Always runs** (even on failures)
 - Generates GitHub Step Summary
 - Shows status of all jobs
@@ -68,6 +77,7 @@ Completely rebuilt the CI/CD pipeline from scratch to fix persistent coverage ag
 ## 🔧 Key Technical Fixes
 
 ### Coverage Artifact Handling
+
 ```yaml
 # BEFORE (problematic):
 name: coverage-raw-${{ matrix.os }}-${{ matrix.python-version }}
@@ -77,6 +87,7 @@ name: coverage-${{ matrix.os }}-py${{ matrix.python-version }}
 ```
 
 ### Artifact Download
+
 ```yaml
 # BEFORE (overwrites files):
 merge-multiple: true
@@ -86,6 +97,7 @@ merge-multiple: false
 ```
 
 ### Upload Reliability
+
 ```yaml
 # Added to all uploads:
 if: always()
@@ -93,6 +105,7 @@ retention-days: 7
 ```
 
 ### Validation Strategy
+
 - File existence checks after coverage generation
 - Comprehensive directory listing in debug steps
 - Detailed logging in aggregation script
@@ -101,13 +114,16 @@ retention-days: 7
 ## 📁 Files Changed
 
 ### Created/Modified
+
 - `.github/workflows/ci.yml` - New streamlined workflow (410 lines)
 - `NEW_WORKFLOW_SUMMARY.md` - This document
 
 ### Backed Up
+
 - `.github/workflows/ci.yml.backup-20251112-151932` - Original 2,239-line workflow
 
 ### Unchanged
+
 - All test files
 - All source code in `tools/`
 - Existing documentation
@@ -124,6 +140,7 @@ retention-days: 7
 ## 🎯 Expected Outcomes
 
 ### If Coverage Works
+
 - ✅ All 6 test jobs generate coverage.json
 - ✅ Coverage aggregation finds all files
 - ✅ Total coverage calculated correctly (expect ~83% based on local testing)
@@ -131,6 +148,7 @@ retention-days: 7
 - 📝 **Action needed**: Adjust `COVERAGE_THRESHOLD` to realistic value (e.g., 80%)
 
 ### If Coverage Still Fails
+
 - Debug output will show exactly which step failed
 - Can investigate specific matrix job that's problematic
 - Simpler structure makes debugging much easier
@@ -138,12 +156,14 @@ retention-days: 7
 ## 📝 Configuration Options
 
 ### Adjust Coverage Threshold
+
 ```yaml
 env:
   COVERAGE_THRESHOLD: '90'  # Change to '80' or realistic value
 ```
 
 ### Adjust Python Matrix
+
 ```yaml
 matrix:
   os: [ubuntu-latest, macos-latest]  # Remove macos if too slow
@@ -151,6 +171,7 @@ matrix:
 ```
 
 ### Disable Docker Builds (for faster iteration)
+
 Comment out the entire `docker` job if not needed during debugging.
 
 ## 🔄 Rollback Plan
@@ -168,9 +189,10 @@ git push
 ## 📊 Monitoring
 
 Watch the CI run at:
-https://github.com/rnaarla/llmops-kv-hygiene/actions
+<https://github.com/rnaarla/llmops-kv-hygiene/actions>
 
 Key things to check:
+
 1. ✅ Do all 6 test jobs complete?
 2. ✅ Does each upload a coverage artifact?
 3. ✅ Does coverage job download all 6 artifacts?
@@ -188,6 +210,7 @@ Key things to check:
 ## 🔮 Future Enhancements
 
 Once core workflow is stable, can add back:
+
 - AI-powered triage
 - Adaptive test selection
 - Auto-fix capabilities
