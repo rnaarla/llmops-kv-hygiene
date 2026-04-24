@@ -26,3 +26,11 @@ This document records a **self-review** of the delivery slice using the reposito
 ## Maintainer note (EnggReviewRules §8)
 
 Changes touched `.github/workflows/ci.yml` and `policy/ci.rego`. Per your governance policy, a **human maintainer** should still perform a normal PR review before production promotion.
+
+## Follow-up slice (all-weeks iteration)
+
+- [x] Forensic mirror sinks and resilient secondary writers
+- [x] CUDA stream-aware `zeroize_cuda` + `scheduled_async` plumbing
+- [x] Adapter `Protocol` surface (`tools/adapters/`)
+- [x] Threat model and supply-chain documentation
+- [x] Pytest `timeout` marker registration; micro-benchmark script for local perf checks

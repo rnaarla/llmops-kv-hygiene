@@ -55,6 +55,9 @@ disallow_untyped_defs = false  # library gradually typing
 [tool.pytest.ini_options]
 addopts = "-q"
 filterwarnings = ["ignore::DeprecationWarning"]
+markers = [
+    "timeout: optional wall-clock limit (requires pytest-timeout)",
+]
 
 [tool.llmops]
 coverage_gate = 90

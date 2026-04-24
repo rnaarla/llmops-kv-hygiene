@@ -18,7 +18,7 @@ Why this matters
 
 What’s inside
 
-- Tamper‑evident forensic logging: append‑only JSONL with SHA‑256 hash chain and optional HMAC (`FORENSIC_HMAC_SECRET`). Rotation markers link files; `verify_all()` validates chains across rotations. See `tools/cache_tracer.py` (ForensicLogger).
+- Tamper‑evident forensic logging: append‑only JSONL with SHA‑256 hash chain and optional HMAC (`FORENSIC_HMAC_SECRET`). Optional **mirror sinks** (`ForensicLogger(..., mirror_paths=[...])` or `CacheTracer(..., forensic_mirror_paths=[...])`) replicate each line for WORM staging or upload pipelines. Rotation markers link files; `verify_all()` validates chains across rotations. See `tools/forensic_logger.py` and `tools/forensic_sink.py`.
 - KV‑cache tracer and enforcer: allocation tagging, sanitization (CPU/NumPy and optional CUDA/PyTorch), coverage attestation with deterministic sampling, policy enforcement (TTL, max reuse), quarantine on violations, and metrics export (JSON + Prometheus). See `tools/cache_tracer.py`.
 - Threshold gates for CI/CD: `tools/eviction_checker.py` consumes exported metrics and fails builds if coverage or hygiene thresholds aren’t met.
 - Metrics: JSON via `export_metrics`, Prometheus textfile via `export_metrics_prometheus`. Optional simple HTTP exporter `tools/metrics_exporter.py`.
@@ -278,6 +278,12 @@ MIT © Contributors. See `LICENSE`.
 Contributing
 
 See `CONTRIBUTING.md`. For security issues, see `SECURITY.md`.
+
+Enterprise references
+
+- [Threat model](docs/THREAT_MODEL_KV_HYGIENE.md)
+- [Supply chain hardening](docs/SUPPLY_CHAIN.md)
+- [Integration protocol](tools/adapters/protocol.py) (`HygieneRuntimeHooks`)
 
 ## CI/CD, security, and documentation
 

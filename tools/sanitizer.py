@@ -22,12 +22,20 @@ RNG = random.Random()  # noqa: S311 - non-crypto RNG sufficient for sampling
 
 
 class SanitizationResult:
-    __slots__ = ("scrubbed_bytes", "duration_ms", "coverage_pct")
+    __slots__ = ("scrubbed_bytes", "duration_ms", "coverage_pct", "scheduled_async")
 
-    def __init__(self, scrubbed_bytes: int, duration_ms: float, coverage_pct: float):
+    def __init__(
+        self,
+        scrubbed_bytes: int,
+        duration_ms: float,
+        coverage_pct: float,
+        *,
+        scheduled_async: bool = False,
+    ):
         self.scrubbed_bytes = scrubbed_bytes
         self.duration_ms = duration_ms
         self.coverage_pct = coverage_pct
+        self.scheduled_async = scheduled_async
 
 
 def _sample_indices(n: int, samples: int) -> list[int]:
@@ -92,17 +100,22 @@ def zeroize_cpu(buf: Any) -> int:
 
 
 def zeroize_cuda(buf: Any, async_: bool) -> bool:
-    if torch is None or not isinstance(
-        buf._tensor, type(torch.tensor([0]))
-    ):  # pragma: no cover - no torch
+    """Zeroize a CUDA tensor.
+
+    Returns True if `zero_` was submitted on ``buf.stream_obj`` (async path).
+    """
+    if torch is None:  # pragma: no cover
         return False
-    t = buf._tensor
-    if async_:
-        t.zero_()  # still synchronous unless stream used; placeholder
+    t = getattr(buf, "_tensor", None)
+    if t is None or not isinstance(t, torch.Tensor) or not t.is_cuda:  # pragma: no cover
+        return False
+    stream = getattr(buf, "stream_obj", None)
+    if async_ and stream is not None:
+        with torch.cuda.stream(stream):
+            t.zero_()
         return True
-    else:
-        t.zero_()
-        return False
+    t.zero_()
+    return False
 
 
 def verify_zero(buf: Any, samples: int | None) -> bool:
@@ -126,11 +139,12 @@ def verify_zero(buf: Any, samples: int | None) -> bool:
 def sanitize_sync(buf: Any, *, verify: bool, samples: int | None) -> SanitizationResult:
     start = time.time()
     scrubbed = 0
+    scheduled_async = False
     if buf.device.startswith("cuda"):
-        scheduled = zeroize_cuda(buf, async_=False)
-        if scheduled:  # pragma: no cover - branch not expected with simplified zeroization
-            pass
-        # For simplicity CUDA path returns full logical size if tensor exists
+        cuda_async = bool(getattr(buf, "cuda_async_zeroize", False))
+        scheduled_async = zeroize_cuda(buf, async_=cuda_async)
+        if scheduled_async:
+            verify = False
         tensor = buf._tensor
         if tensor is not None:
             if hasattr(tensor, "numel") and hasattr(tensor, "element_size"):
@@ -144,4 +158,6 @@ def sanitize_sync(buf: Any, *, verify: bool, samples: int | None) -> Sanitizatio
         ok = verify_zero(buf, samples)
         if not ok:
             coverage_pct = 0.0
-    return SanitizationResult(scrubbed, duration_ms, coverage_pct)
+    if hasattr(buf, "cuda_async_zeroize"):
+        buf.cuda_async_zeroize = False
+    return SanitizationResult(scrubbed, duration_ms, coverage_pct, scheduled_async=scheduled_async)

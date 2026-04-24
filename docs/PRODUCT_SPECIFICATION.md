@@ -21,6 +21,9 @@
 - Each log line includes a SHA-256 hash chain (`prev_hash`, `curr_hash`).
 - When `FORENSIC_HMAC_SECRET` is set, new records include an `hmac` field.
 - **Strict verification**: if verification is run with an HMAC key (environment or `verify_chain(..., hmac_secret=...)`), **every** non-empty line must include a valid `hmac`. Lines written without HMAC fail closed under that verifier configuration.
+- **Optional replication**: `ForensicLogger` accepts `mirror_paths` or `mirror_sinks` to append the
+  same JSONL line to secondary files or custom sinks (for WORM staging, SIEM upload, or object
+  storage pipelines). Mirror failures are logged; the primary log still appends.
 
 ### FR-4: Metrics and gates
 
@@ -34,13 +37,25 @@
 
 ## Non-goals (current release)
 
-- **Not** a full inference server: no bundled vLLM/TensorRT-LLM integration (roadmap: adapter layer).
-- **Not** guaranteed stream-accelerated async CUDA scrub in this codebase: `_zeroize_buffer` remains synchronous; callers must still call `wait()` where applicable for GPU ordering in integrated stacks.
-- **No** third-party LLM API calls in CI (removed for cost, determinism, and attack surface per Engineering Codex economic-efficiency rules).
+- **Not** a full inference server: no bundled vLLM/TensorRT-LLM integration; use
+  `tools.adapters.protocol.HygieneRuntimeHooks` as the integration contract in your serving repo.
+- **Not** a turnkey WORM object-store writer: replication hooks ship in-process; upload to S3/GCS
+  with Object Lock remains an external job consuming mirror files or sinks.
+- **No** third-party LLM API calls in CI (removed for cost, determinism, and attack surface per
+  Engineering Codex economic-efficiency rules).
+
+## CUDA behavior
+
+- When `buf.stream_obj` is a CUDA stream and `sanitize(..., async_=True)` is used, `zeroize_cuda`
+  submits `zero_()` on that stream and returns `True` so callers can `wait()` on ordering.
+- Without a stream, CUDA zeroization runs synchronously on the default stream context.
 
 ## Interfaces (stable contracts)
 
-- **Python**: `CacheTracer`, `ForensicLogger`, `eviction_checker`, `verify_logs` CLI — public entry points documented in `README.md`.
+- **Python**: `CacheTracer`, `ForensicLogger`, `eviction_checker`, `verify_logs` CLI — public entry
+  points documented in `README.md`.
+- **Adapters**: `tools.adapters.protocol.HygieneRuntimeHooks` — integration boundary for serving
+  runtimes (implement in your deployment repo).
 - **Metrics identifiers**: Prometheus names prefixed with `kv_hygiene_*` (do not rename without deprecation, per telemetry stability expectations).
 
 ## Quality bar

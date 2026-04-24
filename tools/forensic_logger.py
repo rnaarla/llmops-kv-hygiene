@@ -8,9 +8,11 @@ import os
 import threading
 import time
 import uuid
-from collections.abc import Mapping, MutableMapping
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from pathlib import Path
 from typing import Any
+
+from .forensic_sink import build_mirror_sinks, emit_to_sinks
 
 
 class ForensicLogger:
@@ -35,6 +37,8 @@ class ForensicLogger:
         *,
         max_bytes: int = 5_000_000,
         hmac_secret: bytes | None = None,
+        mirror_paths: Sequence[str | Path] | None = None,
+        mirror_sinks: Sequence[Callable[[str], None]] | None = None,
     ) -> None:
         self.path = Path(log_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -48,6 +52,10 @@ class ForensicLogger:
         self._prev_hash = self._load_last_hash()
         self._max_bytes = max_bytes
         self._hmac_key = self._resolve_hmac_key(hmac_secret)
+        if mirror_sinks is not None:
+            self._mirror_sinks: tuple[Callable[[str], None], ...] = tuple(mirror_sinks)
+        else:
+            self._mirror_sinks = build_mirror_sinks(mirror_paths)
 
     @staticmethod
     def _canonicalize(record: Mapping[str, Any]) -> str:
@@ -152,8 +160,10 @@ class ForensicLogger:
                         (self._prev_hash + canonical_rotate).encode("utf-8"),
                         hashlib.sha256,
                     ).hexdigest()
+                rotate_line = json.dumps(rotate_record, ensure_ascii=False) + "\n"
                 with self.path.open("a", encoding="utf-8") as f:
-                    f.write(json.dumps(rotate_record, ensure_ascii=False) + "\n")
+                    f.write(rotate_line)
+                emit_to_sinks(self._mirror_sinks, rotate_line, context="rotate")
                 try:
                     os.chmod(self.path, 0o600)
                 except Exception:  # pragma: no cover
@@ -176,8 +186,10 @@ class ForensicLogger:
                         hashlib.sha256,
                     ).hexdigest()
                 line = json.dumps(record, ensure_ascii=False)
+            out_line = line + "\n"
             with self.path.open("a", encoding="utf-8") as f:
-                f.write(line + "\n")
+                f.write(out_line)
+            emit_to_sinks(self._mirror_sinks, out_line, context="append")
             self._prev_hash = curr_hash
             return curr_hash
 

@@ -32,7 +32,7 @@ import os
 import threading
 import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -102,8 +102,11 @@ class CacheTracer:
         verify_samples_default: int = 8,
         default_max_reuse: int = 0,
         default_ttl_sec: float | None = None,
+        forensic_mirror_paths: Sequence[str | Path] | None = None,
     ) -> None:
-        self.logger = ForensicLogger(log_path, max_bytes=max_log_bytes)
+        self.logger = ForensicLogger(
+            log_path, max_bytes=max_log_bytes, mirror_paths=forensic_mirror_paths
+        )
         self._buffers: dict[str, KVBuffer] = {}
         self._lock = threading.RLock()
         logging.getLogger(__name__).setLevel(logging.INFO)
@@ -613,16 +616,14 @@ class CacheTracer:
         return arr, ptr, nbytes, dtype_str
 
     def _zeroize_buffer(self, buf: KVBuffer, *, async_: bool) -> bool:
-        # Delegate zeroization to sanitizer module (synchronous only)
+        buf.cuda_async_zeroize = bool(async_ and buf.device.startswith("cuda"))
         result = sanitizer_mod.sanitize_sync(buf, verify=False, samples=None)
-        # Overwrite (not accumulate) since we do full pass each call
         buf.scrubbed_bytes = result.scrubbed_bytes
-        # Duration captured on first pass; callers aggregate after both passes if needed
         if buf.sanitize_duration_ms is None:
             buf.sanitize_duration_ms = result.duration_ms
         else:
             buf.sanitize_duration_ms += result.duration_ms
-        return False
+        return bool(result.scheduled_async)
 
     def _attest_internal(
         self, buf: KVBuffer, *, verify: bool = True, samples: int | None = None

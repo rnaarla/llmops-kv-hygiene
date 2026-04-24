@@ -33,5 +33,6 @@ class KVBuffer:
     max_reuse: int | None = None
     stream_obj: Any = None
     event_obj: Any = None
+    cuda_async_zeroize: bool = False
     verify_samples: list[int] = field(default_factory=list)
     sanitize_duration_ms: float | None = None
