@@ -1,31 +1,26 @@
-package cicd
+package main
 
-default allow = true
+# Conftest evaluates `deny` rules in package `main` against the input document.
 
-deny[msg] {
-  input.name == "ci.yml"
-  not input.permissions
-  msg := "workflow must define top-level permissions"
+default allow := true
+
+deny contains msg if {
+	not input.permissions
+	msg := "workflow must define top-level permissions"
 }
 
-deny[msg] {
-  input.name == "ci.yml"
-  input.permissions.contents != "read"
-  msg := "workflow contents permission must be read-only"
+deny contains msg if {
+	input.permissions.contents != "read"
+	msg := "workflow contents permission must be read-only"
 }
 
-allowed_job_writes := {
-  "auto_fix",
-  "ci_metrics",
-  "docker-images",
-  "trivy-repo-scan",
-  "docker-scan-pr",
-}
+allowed_job_writes := {"update-metrics"}
 
-deny[msg] {
-  job_name := name
-  job := input.jobs[name]
-  job.permissions.contents == "write"
-  not allowed_job_writes[job_name]
-  msg := sprintf("job %s requests write permissions without approval", [job_name])
+deny contains msg if {
+	some job_name
+	job := input.jobs[job_name]
+	job_perms := job.permissions
+	job_perms.contents == "write"
+	not job_name in allowed_job_writes
+	msg := sprintf("job %s requests contents:write without policy approval", [job_name])
 }

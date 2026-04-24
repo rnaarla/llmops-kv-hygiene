@@ -33,3 +33,13 @@ def test_verify_all_missing_file(tmp_path):
     missing = tmp_path / "no_such.log"
     with pytest.raises(FileNotFoundError):
         ForensicLogger.verify_all(str(missing))
+
+
+def test_verify_chain_strict_hmac_requires_field(tmp_path, monkeypatch):
+    """When verification uses an HMAC key, every line must include a valid hmac field."""
+    monkeypatch.delenv("FORENSIC_HMAC_SECRET", raising=False)
+    p = tmp_path / "plain.log"
+    flog = ForensicLogger(p)
+    flog.append({"event_type": "a"})
+    res = ForensicLogger.verify_chain(p, hmac_secret=b"verify-only-key")
+    assert res["ok"] is False

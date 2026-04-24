@@ -10,7 +10,7 @@ services:
       - FORENSIC_HMAC_SECRET=${FORENSIC_HMAC_SECRET:-}
     volumes:
       - ./forensics:/app/forensics
-    command: bash -lc "python -m pytest -q && python tools/cache_tracer.py --demo --export-metrics forensics/coverage.json --export-prom forensics/metrics.prom"
+    command: bash -lc "python -m pytest -q"
 
   tracer-gpu:
     build:
@@ -30,4 +30,4 @@ services:
       - FORENSIC_HMAC_SECRET=${FORENSIC_HMAC_SECRET:-}
     volumes:
       - ./forensics:/app/forensics
-    command: bash -lc "pytest -q tests/test_cuda_async.py || true; python tools/cache_tracer.py --demo --export-metrics forensics/coverage.json --export-prom forensics/metrics.prom"
+    command: bash -lc "pytest -q tests/test_cuda_async.py || true"

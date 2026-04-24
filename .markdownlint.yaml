@@ -1,0 +1,4 @@
+# Line length (MD013) disabled: README feature matrix and governance docs use wide tables
+# and long prose; stricter wrapping would harm readability without improving correctness.
+default: true
+MD013: false

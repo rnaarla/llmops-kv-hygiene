@@ -21,6 +21,14 @@ class ForensicLogger:
     brittle tests that simulate OS faults; integrity is validated via verify_all tests.
     """
 
+    @staticmethod
+    def _resolve_hmac_key(hmac_secret: bytes | None) -> bytes | None:
+        """Return signing key bytes, or None if HMAC is disabled (no secret configured)."""
+        if hmac_secret:
+            return hmac_secret
+        raw = os.environ.get("FORENSIC_HMAC_SECRET", "").strip().encode("utf-8")
+        return raw if raw else None
+
     def __init__(
         self,
         log_path: str | Path,
@@ -39,9 +47,7 @@ class ForensicLogger:
         self._lock = threading.Lock()
         self._prev_hash = self._load_last_hash()
         self._max_bytes = max_bytes
-        self._hmac_key = (
-            hmac_secret or os.environ.get("FORENSIC_HMAC_SECRET", "").encode("utf-8") or None
-        )
+        self._hmac_key = self._resolve_hmac_key(hmac_secret)
 
     @staticmethod
     def _canonicalize(record: Mapping[str, Any]) -> str:
@@ -181,7 +187,7 @@ class ForensicLogger:
         ok = True
         count = 0
         bad_index: int | None = None
-        key = hmac_secret or os.environ.get("FORENSIC_HMAC_SECRET", "").encode("utf-8") or None
+        key = ForensicLogger._resolve_hmac_key(hmac_secret)
         with Path(path).open("r", encoding="utf-8") as f:
             for i, line in enumerate(f):
                 if not line.strip():
@@ -199,7 +205,11 @@ class ForensicLogger:
                     ok = False
                     bad_index = i
                     break
-                if key is not None and provided_hmac:
+                if key is not None:
+                    if not provided_hmac:
+                        ok = False
+                        bad_index = i
+                        break
                     calc_hmac = hmac.new(
                         key, (prev + canonical).encode("utf-8"), hashlib.sha256
                     ).hexdigest()

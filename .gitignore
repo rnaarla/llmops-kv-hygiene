@@ -41,6 +41,10 @@ reports/
 forensics/
 logs/
 *.log
+ai_analysis/
+aggregate-coverage.json
+all-coverage/
+coverage-reports/
 
 # Docker
 *.tar

@@ -653,10 +653,8 @@ class CacheTracer:
             return True
         # Record deterministic sample indices (even if we short‑circuit success)
         buf.verify_samples = self._sample_indices_deterministic(n, samples)
-        # NumPy fast-path: if ndarray was zeroized via sanitize we trust it
         if self._is_numpy_array(t):
-            return True
-        # Torch / generic path: inspect sampled values
+            return sanitizer_mod.verify_zero(buf, samples)
         return self._samples_zero(t, buf.verify_samples)
 
     @staticmethod
