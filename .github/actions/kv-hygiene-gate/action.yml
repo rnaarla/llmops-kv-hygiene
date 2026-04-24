@@ -1,0 +1,21 @@
+name: KV Hygiene Gate
+description: Run eviction_checker against CacheTracer-exported metrics JSON
+inputs:
+  metrics-file:
+    description: Path to JSON from CacheTracer.export_metrics
+    required: true
+  coverage-min:
+    description: Minimum min_coverage_pct in metrics
+    required: false
+    default: '99.9'
+runs:
+  using: composite
+  steps:
+    - name: Eviction / hygiene thresholds
+      shell: bash
+      run: |
+        set -euo pipefail
+        python tools/eviction_checker.py "${{ inputs.metrics-file }}" \
+          --coverage-min "${{ inputs.coverage-min }}" \
+          --unsanitized-max 0 --quarantine-max 0 \
+          --out forensics/verdict-ci.json

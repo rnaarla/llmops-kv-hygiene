@@ -287,7 +287,7 @@ Enterprise references
 
 ## CI/CD, security, and documentation
 
-- **Workflow**: `.github/workflows/ci.yml` — lint, typecheck, Conftest policy on the workflow file, multi-Python tests, coverage gate (90%), chaos validation, Trivy SARIF, Docker build/scan on `main`, optional metrics commit job.
+- **Workflows**: `.github/workflows/ci.yml` (lint, typecheck, Conftest on workflow YAML, multi-Python tests, coverage gate (90%), chaos validation, **hygiene metrics gate**, **SBOM artifact**, Trivy FS+secret SARIF, optional **`VULN_GATING`** SARIF hard gate, Docker build/scan on `main`), `.github/workflows/codeql.yml` (Python CodeQL), `.github/workflows/dependency-review.yml` (PR dependency review). Optional metrics commit job on `main`.
 - **Least privilege**: Default `permissions.contents: read`; only the `update-metrics` job uses `contents: write` (policy enforced in `policy/ci.rego` via Conftest).
 - **Details**: See [docs/CI_ENHANCEMENTS.md](docs/CI_ENHANCEMENTS.md) and the [product specification](docs/PRODUCT_SPECIFICATION.md).
 
@@ -308,23 +308,28 @@ Enterprise references
 | Metrics | JSON Metrics Export | Hygiene KPIs (coverage, durations, reuse) | `cache_tracer.py` | Manual | — | N/A |
 | Metrics | Prometheus Textfile Export | Textfile collector lines for scraping | `cache_tracer.py` | Manual | — | Observability gap if missing |
 | Metrics | HTTP Metrics Server | Lightweight HTTP `/metrics` endpoint | `metrics_exporter.py` | Manual start | `METRICS_FILE`, `METRICS_PORT` | Monitoring gap if absent |
-| CI Gate | Hygiene Threshold Checker | Enforces coverage / quarantine limits | `eviction_checker.py` | In CI | CLI flags | Merge/deploy blocked |
+| CI Gate | Hygiene Threshold Checker | Enforces coverage / quarantine limits | `eviction_checker.py`, `ci.yml` (`hygiene-gate`), `.github/actions/kv-hygiene-gate` | Yes | CLI / composite inputs | Merge blocked |
 | CI Gate | Coverage ≥ 90% | Line/branch coverage enforcement | `ci.yml` | Yes | Coverage flag in workflow | Merge blocked |
+| Supply chain | Pinned Python deps | Reproducible installs in CI and Docker | `requirements.lock` | Yes | Regenerate after `requirements.txt` changes | Drift vs lockfile |
+| Security | SBOM (SPDX) | Syft-generated SPDX JSON artifact | `ci.yml` (`sbom` job) | Yes | Syft version pin in workflow | Missing SBOM artifact |
 | Security | Container Image Build | CPU image build and push to GHCR | `ci.yml` | `main` push only | — | No published image on PR-only flows |
 | Security | Trivy Image Scan | Image vulnerability scan (SARIF upload) | `ci.yml` | `main` push | Trivy action config | Findings in GitHub Security tab |
-| Security | Trivy FS Scan | Filesystem vulnerability scan (SARIF upload) | `ci.yml` | Yes | Trivy action config | Findings in GitHub Security tab |
-| Security | Vulnerability gating | Optional org-specific SARIF gate (not bundled) | Custom workflow step | No | Add your own policy | Default: visibility only |
+| Security | Trivy FS Scan | Filesystem vulnerability + secret scan (SARIF upload) | `ci.yml` | Yes | `scanners: vuln,secret` | Findings in GitHub Security tab |
+| Security | Vulnerability SARIF gate | Fails CI on blocking SARIF when enabled | `tools/sarif_vuln_gate.py`, `ci.yml` | Org opt-in | Repository secret `VULN_GATING=true` | Merge blocked when enabled |
+| Security | CodeQL (Python) | Static analysis on default branch + PRs | `.github/workflows/codeql.yml` | Yes | CodeQL workflow | Findings in Security tab |
+| Security | Dependency review | GitHub dependency review on PRs | `.github/workflows/dependency-review.yml` | PRs to `main` | GitHub feature availability | PR visibility of dependency issues |
 | Compliance | HMAC Log Strengthening | Adds HMAC to each forensic line | `forensic_logger.py` | Optional | `FORENSIC_HMAC_SECRET` | Lower tamper resistance if unset |
 | Observability | Activation Anomaly Logging | z-score + max outlier detection | `activation_logger.py` | Manual use | `z_threshold` arg | Missed anomaly detection |
 | Resilience | Double-Pass Sanitization | Second overwrite for assurance | `cache_tracer.py` | Off | `KV_DOUBLE_PASS_DEFAULT=true` | Slight perf cost if enabled |
 | Performance | P50/P95 Track | Sanitize duration distribution | `cache_tracer.py` | Yes | — | Missing latency insight |
 | Performance | Reuse Rate Metric | reuse_events / allocations | `cache_tracer.py` | Yes | — | Policy tuning insight lost |
 | Ops | Verify + Prune CLI | Combined integrity + retention tool | `verify_logs.py` | Manual/cron | CLI flags | Old logs accumulate if unused |
-| Future (Planned) | Kubernetes Cron Examples | CronJobs for verify/prune/gates | (planned docs) | No | — | Manual scripting needed |
-| Future (Planned) | Real CUDA Async Streams | True async zeroization path | (future implementation) | No | — | Lower overlap efficiency |
-| Future (Planned) | Composite Action for Gating | Reusable vuln gate action | (future action) | No | — | Duplication across repos |
+| Ops | Kubernetes Cron Examples | CronJobs for verify, eviction gate, log pruning | `k8s/cronjob-*.yaml` | Reference manifests | Image + PVC + secrets in cluster | Ops must apply manifests |
+| Performance | Real CUDA async streams | CUDA zeroization uses bound stream context when `async_=True` | `tools/sanitizer.py`, `tools/buffer_model.py`, `tests/test_cuda_async.py` | When CUDA + Torch available | `KVBuffer.stream_obj`, `cuda_async_zeroize` | Async ordering bugs if stream misuse |
+| CI Gate | Composite action for hygiene | Reusable eviction_checker step | `.github/actions/kv-hygiene-gate/action.yml` | Yes | Inputs: `metrics-file` | Same as hygiene threshold checker |
+| Adapters | vLLM / TensorRT-LLM reference | Runnable CPU hooks + placement notes for serving stacks | `tools/adapters/reference_hooks.py`, `vllm_hooks.py`, `tensorrt_llm_hooks.py` | Yes | Wire at pool boundaries in your fork | Incorrect hook placement → hygiene gaps |
 
-Add a repository-specific SARIF gate (for example fail on HIGH/CRITICAL) if your security program requires it; the default workflow uploads Trivy SARIF for review. Release notes: [CHANGELOG.md](CHANGELOG.md).
+Set repository secret **`VULN_GATING=true`** to fail the pipeline when Trivy FS SARIF contains blocking results (after severity filter). Default remains visibility-only in GitHub Security. Release notes: [CHANGELOG.md](CHANGELOG.md).
 
 ## Hygiene Workflow & Quality Gates
 
@@ -335,22 +340,22 @@ The project enforces a layered hygiene pipeline so regressions are caught as ear
 - `pre-commit` hooks: `ruff check --fix`, `ruff format`, and a fast `pytest -q -k "sanitization or isolation"` smoke slice.
 - Goal: <10s feedback; reject style / obvious hygiene logic regressions before commit.
 
-1. CI Test & Coverage Gate
+2. CI test and coverage gate
 
 - Full `pytest` run with `pytest --cov --cov-report=term-missing --cov-fail-under=90` in GitHub Actions and Jenkins.
 - Fails the pipeline if aggregate line+branch coverage dips below 90%.
 
-1. Hygiene Metrics Gate (optional separate job/stage)
+3. Hygiene metrics gate (in default CI)
 
-- Runs `python tools/eviction_checker.py forensics/coverage.json --coverage-min 99.9 --unsanitized-max 0 --quarantine-max 0` against freshly exported metrics.
-- Ensures real runtime hygiene (sanitization coverage per buffer) matches policy; lets per‑buffer attestation stay stricter (99.9%) than code coverage (90%).
+- The `hygiene-gate` job exports metrics via `tools/ci_export_hygiene_metrics.py` and runs `.github/actions/kv-hygiene-gate` (same thresholds: 99.9% min coverage, zero unsanitized/quarantine).
+- Re-run `python tools/eviction_checker.py …` in deploy pipelines against production-exported metrics if you need environment-specific thresholds.
 
-1. Forensic Integrity Gate (periodic / cron)
+4. Forensic integrity gate (periodic / cron)
 
 - `python -m tools.verify_logs --log-dir forensics --log-file kv_cache.log --retention-days 30 --max-rotated 20`.
 - Verifies hash chain + rotation linkage and prunes old rotated logs (active file never pruned) providing auditable integrity evidence.
 
-Escalation path: failures at layers 1–2 block merges; layer 3 blocks deploy promotion; layer 4 raises operational alerts (not a merge blocker) but produces compliance evidence.
+Escalation path: failures at layers 1–3 block merges in GitHub Actions; layer 4 raises operational alerts (not a merge blocker by default) but produces compliance evidence.
 
 ## Coverage policy
 

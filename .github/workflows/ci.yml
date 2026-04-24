@@ -81,7 +81,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.lock
 
       - name: Run Ruff
         run: ruff check .
@@ -111,7 +111,11 @@ jobs:
           conftest --version
 
       - name: Evaluate policies
-        run: conftest test .github/workflows/ci.yml -p policy
+        run: |
+          set -euo pipefail
+          conftest test .github/workflows/ci.yml -p policy
+          conftest test .github/workflows/codeql.yml -p policy
+          conftest test .github/workflows/dependency-review.yml -p policy
 
   # ===========================================================================
   # PHASE 2: Testing with Coverage
@@ -135,7 +139,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.lock
 
       - name: Run tests with coverage
         run: |
@@ -334,12 +338,63 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.lock
 
       - name: Run chaos simulation
         run: |
           export PYTHONPATH="$PYTHONPATH:$(pwd)"
           python tools/chaos_validation.py
+
+  hygiene-gate:
+    name: Hygiene metrics gate
+    needs: [test, policy-guard]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock
+
+      - name: Export CI hygiene metrics
+        run: |
+          export PYTHONPATH="$PYTHONPATH:$(pwd)"
+          python tools/ci_export_hygiene_metrics.py
+
+      - name: Run hygiene composite gate
+        uses: ./.github/actions/kv-hygiene-gate
+        with:
+          metrics-file: forensics/coverage.json
+
+  sbom:
+    name: SBOM (SPDX JSON)
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Syft
+        env:
+          SYFT_VERSION: 1.18.0
+        run: |
+          set -euo pipefail
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b "${RUNNER_TEMP}/syft-bin" "v${SYFT_VERSION}"
+          echo "${RUNNER_TEMP}/syft-bin" >> "${GITHUB_PATH}"
+
+      - name: Generate SPDX SBOM
+        run: syft dir:. -o spdx-json=sbom.spdx.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom-spdx
+          path: sbom.spdx.json
+          retention-days: 30
 
   # ===========================================================================
   # PHASE 4: Security Scanning
@@ -353,10 +408,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run Trivy filesystem scan
-        uses: aquasecurity/trivy-action@0.33.0
+        uses: aquasecurity/trivy-action@0.35.0
         with:
+          version: v0.69.3
           scan-type: 'fs'
           scan-ref: '.'
+          scanners: 'vuln,secret'
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
@@ -367,12 +424,22 @@ jobs:
         with:
           sarif_file: 'trivy-results.sarif'
 
+      - name: Optional SARIF hard gate (VULN_GATING)
+        env:
+          VULN_GATING: ${{ secrets.VULN_GATING }}
+        run: |
+          if [ "${VULN_GATING}" != "true" ]; then
+            echo "VULN_GATING is not set to true — skipping SARIF hard gate"
+            exit 0
+          fi
+          python tools/sarif_vuln_gate.py trivy-results.sarif
+
   # ===========================================================================
   # PHASE 5: Docker Build & Scan (Main Branch Only)
   # ===========================================================================
   docker:
     name: Docker Build & Scan
-    needs: [coverage, security-scan]
+    needs: [coverage, security-scan, hygiene-gate, sbom]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
@@ -402,8 +469,9 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Scan Docker image with Trivy
-        uses: aquasecurity/trivy-action@0.33.0
+        uses: aquasecurity/trivy-action@0.35.0
         with:
+          version: v0.69.3
           image-ref: ghcr.io/${{ github.repository }}:${{ github.sha }}
           format: 'sarif'
           output: 'trivy-image.sarif'
@@ -416,7 +484,7 @@ jobs:
 
   docker-scan-pr:
     name: Scan Docker Images for PRs
-    needs: [coverage, meta-self-test]
+    needs: [coverage, meta-self-test, hygiene-gate]
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     permissions:
@@ -455,8 +523,9 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Trivy scan CPU image
-        uses: aquasecurity/trivy-action@0.33.0
+        uses: aquasecurity/trivy-action@0.35.0
         with:
+          version: v0.69.3
           image-ref: ghcr.io/${{ github.repository }}:pr-${{ github.event.pull_request.number }}
           format: sarif
           output: trivy-pr-cpu.sarif
@@ -594,7 +663,7 @@ jobs:
   # ===========================================================================
   summary:
     name: CI Summary
-    needs: [lint, test, coverage, security-scan]
+    needs: [lint, test, coverage, security-scan, hygiene-gate, sbom]
     if: always()
     runs-on: ubuntu-latest
 
@@ -609,6 +678,8 @@ jobs:
           echo "| Tests | ${{ needs.test.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Coverage | ${{ needs.coverage.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Security Scan | ${{ needs.security-scan.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Hygiene gate | ${{ needs.hygiene-gate.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SBOM | ${{ needs.sbom.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           if [ "${{ needs.coverage.outputs.coverage_pct }}" != "" ]; then

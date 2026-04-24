@@ -2,3 +2,5 @@
 # and long prose; stricter wrapping would harm readability without improving correctness.
 default: true
 MD013: false
+# Allow explicit 1/2/3/4 step numbering in layered pipeline sections (README quality gates).
+MD029: false

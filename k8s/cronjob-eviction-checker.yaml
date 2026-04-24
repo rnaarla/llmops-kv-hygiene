@@ -22,10 +22,12 @@ spec:
               volumeMounts:
                 - name: forensics
                   mountPath: /app/forensics
-              command: [
-                "bash", "-lc",
-                "python - << 'PY'\nfrom tools.cache_tracer import ForensicLogger\nprint(ForensicLogger.verify_chain('forensics/kv_cache.log'))\nPY\n && python tools/eviction_checker.py forensics/coverage.json --out forensics/verdict.json"
-              ]
+              command: ["/bin/bash", "-c"]
+              args:
+                - |
+                  set -euo pipefail
+                  python -c "from tools.cache_tracer import ForensicLogger as F; import sys; r=F.verify_chain('forensics/kv_cache.log'); sys.exit(0 if r.get('ok') else 1)"
+                  python tools/eviction_checker.py forensics/coverage.json --out forensics/verdict.json
           volumes:
             - name: forensics
               persistentVolumeClaim:
